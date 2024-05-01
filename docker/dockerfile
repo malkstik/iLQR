@@ -1,0 +1,61 @@
+# FROM ubuntu:latest
+FROM osrf/ros:iron-desktop-full
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc
+
+LABEL author="Aaron Tran <aarontranpvt@gmail.com>"
+
+RUN rm /bin/sh && ln -s /bin/bash /bin/sh
+SHELL ["/bin/bash", "-c"]
+RUN echo 'APT::Install-Suggests "0";' >> /etc/apt/apt.conf.d/00-docker
+RUN echo 'APT::Install-Recommends "0";' >> /etc/apt/apt.conf.d/00-docker
+RUN DEBIAN_FRONTEND=noninteractive \
+  apt-get update \
+  && apt-get install -y python3 \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update && \
+      apt-get -y install sudo
+
+RUN apt-get update && apt-get install -y \
+    git \
+    python3-pip \
+    curl \
+    zip \
+    unzip \
+    tar \
+    cmake \
+    build-essential \
+    g++ \
+    ninja-build \
+    libeigen3-dev
+
+# Drake
+RUN apt-get update
+RUN apt-get install --no-install-recommends -y \
+  ca-certificates gnupg lsb-release wget
+RUN wget -qO- https://drake-apt.csail.mit.edu/drake.asc | gpg --dearmor - \
+  | sudo tee /etc/apt/trusted.gpg.d/drake.gpg >/dev/null
+RUN echo "deb [arch=amd64] https://drake-apt.csail.mit.edu/$(lsb_release -cs) $(lsb_release -cs) main" \
+  | sudo tee /etc/apt/sources.list.d/drake.list >/dev/null
+RUN apt-get update
+RUN apt-get install --no-install-recommends -y drake-dev
+ENV PATH="/opt/drake/bin${PATH:+:${PATH}}"
+ENV PYTHONPATH="/opt/drake/lib/python$(python3 -c 'import sys; print("{0}.{1}".format(*sys.version_info))')/site-packages${PYTHONPATH:+:${PYTHONPATH}}"
+
+#Convenient packages
+RUN apt-get install -y plocate 
+RUN apt-get install -y iputils-ping
+RUN apt-get update && apt-get install -y gdb
+RUN apt-get install -y ffmpeg
+RUN pip3 install notebook
+
+#X11 Forwarding
+RUN apt install -y xauth
+
+WORKDIR /home
+
+RUN useradd --create-home malkstik
+RUN echo "malkstik:1234" | chpasswd && adduser malkstik sudo
+
+WORKDIR "/home/malkstik"
+
