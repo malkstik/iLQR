@@ -29,6 +29,8 @@ RUN apt-get update && apt-get install -y \
     ninja-build \
     libeigen3-dev
 
+WORKDIR /tmp
+
 # Drake
 RUN apt-get update
 RUN apt-get install --no-install-recommends -y \
@@ -39,8 +41,10 @@ RUN echo "deb [arch=amd64] https://drake-apt.csail.mit.edu/$(lsb_release -cs) $(
   | sudo tee /etc/apt/sources.list.d/drake.list >/dev/null
 RUN apt-get update
 RUN apt-get install --no-install-recommends -y drake-dev
+
 ENV PATH="/opt/drake/bin${PATH:+:${PATH}}"
-ENV PYTHONPATH="/opt/drake/lib/python$(python3 -c 'import sys; print("{0}.{1}".format(*sys.version_info))')/site-packages${PYTHONPATH:+:${PYTHONPATH}}"
+RUN PYVER=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")') \
+    && echo "export PYTHONPATH=/opt/drake/lib/python${PYVER}/site-packages:\$PYTHONPATH" >> /root/.bashrc
 
 #Convenient packages
 RUN apt-get install -y plocate 
