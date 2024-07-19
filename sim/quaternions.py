@@ -1,5 +1,5 @@
 import numpy as np
-
+from scipy.spatial.transform import Rotation as R
 
 Quaternion = np.ndarray
 H = np.vstack((np.zeros((1,3)), np.eye(3)))
@@ -27,7 +27,7 @@ def GetLeftMatrix(q) -> np.ndarray:
 
     L_q = np.zeros((4,4))
     L_q[0, 0] = w
-    L_q[0, 1:] = v
+    L_q[0, 1:] = -v
     L_q[1:, 0] = v
     L_q[1:, 1:] = w* np.eye(3) + hat(q)
 
@@ -60,3 +60,20 @@ def QuaternionToRotation(q: Quaternion):
     '''
     L = GetLeftMatrix(q)
     return H.T @ T @ L @ T @ L @ H
+
+
+def SampleQuaternion():
+    rotation = R.random()
+    q = rotation.as_quat()
+    return np.hstack((q[-1], q[1:])) 
+
+if __name__ == "__main__":
+    q = SampleQuaternion()  
+    quat = np.hstack((q[-1], q[:-1]))
+
+    rotation = R.from_quat(q)
+    rotation_check = QuaternionToRotation(quat)
+
+    print(rotation.as_matrix())
+    print(rotation_check)
+
