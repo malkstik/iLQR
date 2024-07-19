@@ -2,7 +2,7 @@ from pydrake.all import (VectorSystem,
                          Diagram,
                          MultibodyPlant,
                          FirstOrderTaylorApproximation,
-                         ContinuousAlgebraicRiccatiEquation)
+                         LinearQuadraticRegulator)
 
 import numpy as np
 
@@ -55,8 +55,6 @@ class QuadrotorLQR(VectorSystem):
 
     def DoCalcVectorOutput(self, context, quadrotor_state, not_used, motor_current):
         differential_quadrotor_state = self._ComputeDifferentialState(quadrotor_state)
-        print(self.K.shape)
-        print(differential_quadrotor_state.shape)
         motor_current = self.ref_action - self.K @ differential_quadrotor_state   
 
 
@@ -73,7 +71,7 @@ class QuadrotorLQR(VectorSystem):
         Ared = E.T @ sys.A() @ E
         Bred = E.T @ sys.B()
 
-        self.K = ContinuousAlgebraicRiccatiEquation(Ared, Bred, self.Q, self.R)
+        self.K, _ = LinearQuadraticRegulator(Ared, Bred, self.Q, self.R)
 
     def _ComputeDifferentialState(self, state):
         q_ref = self.ref_state[:4]
