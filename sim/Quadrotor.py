@@ -18,6 +18,10 @@ from pydrake.all import (
     OutputPort,
     )
 import numpy as np
+
+from pydrake.all import Variable
+from sim.quaternions import hat, GetLeftMatrix, GetAttititudeJacobian, ParamToQuaternion, QuaternionToParam, QuaternionToRotation
+
 class QuadrotorGeometry(LeafSystem):
     def __init__(self, scene_graph: SceneGraph) -> None:
         super().__init__()
@@ -69,6 +73,74 @@ class QuadrotorGeometry(LeafSystem):
             scene_graph.get_source_pose_port(quadrotor_geometry.source_id)
         )
         return quadrotor_geometry
+
+# TODO: write linearization, potentially rewrite as vectorsystem
+class AnalyticalQuadrotorModel:
+    def __init__(self, L, kF, kM, m, J):
+        self.L = L
+        self.kF = kF
+        self.kM = kM
+        self.m = m
+        self.J = J
+
+
+        self.J_inv = np.linalg.inv(J)
+        self.kF_matrix = np.vstack((np.zeros((2,4)), kF * np.zeros((1, 4))))
+        self.kM_matrix = np.array([[   0,   L*kF,   0  , -L*kF],
+                                   [-L*kF,    0,   L*kF,   0],
+                                   [  kM,   -kM,    kM,   -kM]])
+        self._gravity = np.array([0, 0, -9.80665]).reshape((3,1))
+
+        vars = ["x", "y", "z", "qw", "qx", "qy", "qz", "vx", "vy", "vz", "wx", "wy", "wz"]
+        state = [Variable(var) for var in vars]
+        x, y, z, qw, qx, qy, qz, vx, vy, vz, wx, wy, wz = state
+        dynamics = [
+            
+        ]
+        
+
+    def continuous_dynamics(self, x: np.ndarray, u: np.ndarray) -> np.ndarray:
+        '''
+        :param x: state as [x, y, z, qw, qx, qy, qz, vx, vy, vz, wx, wy, wx]^T
+        :param u: action as motor currents
+        :return x_dot: state time derivative
+        '''
+
+        #State
+        r = x[:3]
+        q = x[3:7]
+        v = x[7:10]
+        w = x[10:]
+
+        Q = QuaternionToRotation(q)
+
+        # Time derivatives
+        r_dot = Q @ r
+        q_dot = 0.5 * GetAttititudeJacobian(q) @ w
+        v_dot = Q.T @ self._gravity + 1/self.m * self.kF_matrix @ u - hat(w) @ v
+        w_dot = self.J_inv @ (-hat(w) @ self.J @ w + self.kM_matrix @ u) 
+
+        return np.hstack((r_dot, q_dot, v_dot, w_dot))
+
+    def augment_matrix(self, q):
+        E = np.zeros((13, 12))
+        E[:3, :3] = np.eye(3)
+        E[3:7, 3:6] = GetAttititudeJacobian(q)
+        E[7:, 6:] = np.eye(6)
+
+        return E 
+
+    def linearize_dynamics(self, reference_state, reference_action):
+        q0 = reference_state[3:7]
+        #Linearize about reference
+        A, B = None, None
+        #Compute reduced system
+        E = self.augment_matrix(q0)
+        A_reduced = E.T @ A @ E
+        B_reduced = E.T @ B
+
+        return A_reduced, B_reduced
+
 
 
 
