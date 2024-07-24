@@ -55,7 +55,7 @@ class QuadrotorLQR(VectorSystem):
 
     def DoCalcVectorOutput(self, context, quadrotor_state, not_used, motor_current):
         differential_quadrotor_state = self._ComputeDifferentialState(quadrotor_state)
-        motor_current = self.ref_action - self.K @ differential_quadrotor_state   
+        motor_current[:] = self.ref_action - self.K @ differential_quadrotor_state   
 
 
     def _ComputeFeedbackGain(self, context):
@@ -68,6 +68,7 @@ class QuadrotorLQR(VectorSystem):
         E = np.zeros((13, 12))
         E[:4, :3] = GetAttititudeJacobian(q0)
         E[4:, 3:] = np.eye(9)
+        
         Ared = E.T @ sys.A() @ E
         Bred = E.T @ sys.B()
 
