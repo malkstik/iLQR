@@ -2,7 +2,8 @@ from pydrake.all import (VectorSystem,
                          Diagram,
                          MultibodyPlant,
                          FirstOrderTaylorApproximation,
-                         LinearQuadraticRegulator)
+                         LinearQuadraticRegulator,
+                         Context)
 
 import numpy as np
 
@@ -10,10 +11,7 @@ import os
 import sys
 sys.path.append(print(os.path.abspath(os.path.join(os.getcwd(), os.pardir))))
 
-
 from sim.quaternions import GetAttititudeJacobian, QuaternionToParam, GetLeftMatrix
-
-
 
 class QuadrotorLQR(VectorSystem):
     """Define LQR controller for quadrotor using quaternion floating base
@@ -34,7 +32,7 @@ class QuadrotorLQR(VectorSystem):
         self.SetReferencePoint(ref_state, ref_action)
 
 
-    def SetReferencePoint(self, ref_state, ref_action):
+    def SetReferencePoint(self, ref_state: np.ndarray, ref_action: np.ndarray):
         '''
         Updates reference state and action then recomputes linearization and optimal feedback gain
         :param ref_state: reference state consisting of 
@@ -57,8 +55,10 @@ class QuadrotorLQR(VectorSystem):
         differential_quadrotor_state = self._ComputeDifferentialState(quadrotor_state)
         motor_current[:] = self.ref_action - self.K @ differential_quadrotor_state   
 
-
-    def _ComputeFeedbackGain(self, context):
+    def _ComputeFeedbackGain(self, context: Context):
+        '''
+        Computes optimal feedback gain matrix from LQR
+        '''
         sys =   FirstOrderTaylorApproximation(self.quadrotor, 
                                     context,
                                     self.quadrotor.get_input_port().get_index(),
@@ -74,7 +74,10 @@ class QuadrotorLQR(VectorSystem):
 
         self.K, _ = LinearQuadraticRegulator(Ared, Bred, self.Q, self.R)
 
-    def _ComputeDifferentialState(self, state):
+    def _ComputeDifferentialState(self, state: np.ndarray):
+        '''
+        Computes differential state accounting for quaternion kinematics
+        '''
         q_ref = self.ref_state[:4]
         q = state[:4]
         differential_quaternion = QuaternionToParam(GetLeftMatrix(q_ref).T @ q.reshape((4,1))
