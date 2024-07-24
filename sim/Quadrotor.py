@@ -1,5 +1,4 @@
-from IPython.display import SVG, display, Markdown
-
+from IPython.display import SVG, display
 import pydot
 
 from pydrake.all import (
@@ -18,11 +17,12 @@ from pydrake.all import (
     Quaternion,
     OutputPort,
     )
-
+import numpy as np
 class QuadrotorGeometry(LeafSystem):
     def __init__(self, scene_graph: SceneGraph) -> None:
         super().__init__()
         self.scene_graph = scene_graph
+        
         #Add model
         plant = MultibodyPlant(0.0)
         parser = Parser(plant)
@@ -45,18 +45,22 @@ class QuadrotorGeometry(LeafSystem):
     def OutputGeometryPose(self, context: Context, 
                                 poses: FramePoseVector):
         state = self.get_input_port(0).Eval(context)
+
         R = Quaternion(state[:4])
         p = state[4:7]
         pose = RigidTransform(R, p)
-        poses.set_value({self.frame_id_: pose})
-        # poses = pydrake.geometry.FramePoseVector(self.frame_id_, pose)
+        FPV = FramePoseVector()
+        FPV.set_value(self.frame_id_, pose)
+        
+        poses.set_value(FPV)
     
     @classmethod
     def AddToBuilder(cls, 
                     builder: DiagramBuilder,
                     quadrotor_state_port: OutputPort, 
-                    scene_graph: SceneGraph):
+                    scene_graph: SceneGraph) -> LeafSystem:
         quadrotor_geometry = builder.AddSystem(QuadrotorGeometry(scene_graph))
+        quadrotor_geometry.set_name("QuadrotorGeometry")
         builder.Connect(
             quadrotor_state_port, quadrotor_geometry.get_input_port(0) 
         )
@@ -64,6 +68,7 @@ class QuadrotorGeometry(LeafSystem):
             quadrotor_geometry.get_output_port(0),
             scene_graph.get_source_pose_port(quadrotor_geometry.source_id)
         )
+        return quadrotor_geometry
 
 
 
