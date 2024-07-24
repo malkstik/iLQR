@@ -13,13 +13,35 @@ sys.path.append(print(os.path.abspath(os.path.join(os.getcwd(), os.pardir))))
 
 from sim.quaternions import GetAttititudeJacobian, QuaternionToParam, GetLeftMatrix
 
-class QuadrotorLQR(VectorSystem):
+class QuadrotorController(VectorSystem):
+    """Base controller class for quadrotor using quaternion floating base
+    """
+    def __init__(self, quadrotor: Diagram, multibody_plant: MultibodyPlant):
+            # 13 inputs (quadrotor state), 4 motor current outputs.
+            VectorSystem.__init__(self, 13, 4)
+            self.quadrotor = quadrotor
+            self.plant = multibody_plant
+
+    def DoCalcVectorOutput(self, context: Context, quadrotor_state, not_used, motor_current):
+        return NotImplemented
+    
+    def _ComputeDifferentialState(self, state: np.ndarray):
+        '''
+        Computes differential state accounting for quaternion kinematics
+        '''
+        q_ref = self.ref_state[:4]
+        q = state[:4]
+        differential_quaternion = QuaternionToParam(GetLeftMatrix(q_ref).T @ q.reshape((4,1))
+                                                    ).reshape((3))
+        return np.hstack((differential_quaternion, state[4:]- self.ref_state[4:]))
+    
+class QuadrotorLQR(QuadrotorController):
     """Define LQR controller for quadrotor using quaternion floating base
     """
 
     def __init__(self, quadrotor: Diagram, multibody_plant: MultibodyPlant, Q: np.ndarray, R: np.ndarray):
         # 13 inputs (quadrotor state), 4 motor current outputs.
-        VectorSystem.__init__(self, 13, 4)
+        super().__init__(quadrotor, multibody_plant)
         self.quadrotor = quadrotor
         self.plant = multibody_plant
         self.Q = Q
@@ -51,7 +73,7 @@ class QuadrotorLQR(VectorSystem):
 
         self._ComputeFeedbackGain(context)
 
-    def DoCalcVectorOutput(self, context, quadrotor_state, not_used, motor_current):
+    def DoCalcVectorOutput(self, context: Context, quadrotor_state: np.ndarray, not_used: np.ndarray, motor_current: np.ndarray):
         differential_quadrotor_state = self._ComputeDifferentialState(quadrotor_state)
         motor_current[:] = self.ref_action - self.K @ differential_quadrotor_state   
 
@@ -73,17 +95,6 @@ class QuadrotorLQR(VectorSystem):
         Bred = E.T @ sys.B()
 
         self.K, _ = LinearQuadraticRegulator(Ared, Bred, self.Q, self.R)
-
-    def _ComputeDifferentialState(self, state: np.ndarray):
-        '''
-        Computes differential state accounting for quaternion kinematics
-        '''
-        q_ref = self.ref_state[:4]
-        q = state[:4]
-        differential_quaternion = QuaternionToParam(GetLeftMatrix(q_ref).T @ q.reshape((4,1))
-                                                    ).reshape((3))
-        return np.hstack((differential_quaternion, state[4:]- self.ref_state[4:]))
-
 
 if __name__ == "__main__":
     pass
