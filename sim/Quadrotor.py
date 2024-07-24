@@ -28,17 +28,23 @@ class QuadrotorGeometry(LeafSystem):
         self.scene_graph = scene_graph
         
         #Add model
-        plant = MultibodyPlant(0.0)
-        parser = Parser(plant)
+        self.plant = MultibodyPlant(0.0)
+        self.plant.set_name("Skydio Quadrotor")
+        self.source_id = self.plant.RegisterAsSourceForSceneGraph(scene_graph)
+
+        parser = Parser(self.plant)
         (model_instance,) = parser.AddModelsFromUrl(
             "package://drake_models/skydio_2/quadrotor.urdf"
         )
-        plant.RegisterAsSourceForSceneGraph(scene_graph)
-        plant.Finalize()
-        
-        body_index = plant.GetBodyIndices(model_instance)[0]
-        self.source_id = plant.get_source_id()
-        self.frame_id_ = plant.GetBodyFrameIdOrThrow(body_index)
+
+        self.plant.Finalize()
+
+        X_Identity = RigidTransform(np.eye(4))
+        self.plant.SetDefaultFreeBodyPose(self.plant.GetBodyByName("base_link"), X_Identity)
+
+        body_index = self.plant.GetBodyIndices(model_instance)[0]
+        # self.source_id = plant.get_source_id()
+        self.frame_id_ = self.plant.GetBodyFrameIdOrThrow(body_index)
         self.DeclareVectorInputPort("state", 13)
         self.DeclareAbstractOutputPort(
             "geometry_pose",
@@ -50,7 +56,7 @@ class QuadrotorGeometry(LeafSystem):
                                 poses: FramePoseVector):
         state = self.get_input_port(0).Eval(context)
 
-        R = Quaternion(state[:4])
+        R = Quaternion(state[:4]/np.linalg.norm(state[:4]))
         p = state[4:7]
         pose = RigidTransform(R, p)
         FPV = FramePoseVector()
@@ -72,6 +78,8 @@ class QuadrotorGeometry(LeafSystem):
             quadrotor_geometry.get_output_port(0),
             scene_graph.get_source_pose_port(quadrotor_geometry.source_id)
         )
+
+
         return quadrotor_geometry
 
 # TODO: write linearization, potentially rewrite as vectorsystem
