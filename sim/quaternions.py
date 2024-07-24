@@ -62,8 +62,13 @@ def QuaternionToRotation(q: Quaternion):
     return H.T @ T @ L @ T @ L @ H
 
 
-def SampleQuaternion():
-    rotation = R.random()
+def SampleQuaternion(near_identity = False):
+    if near_identity:
+        euler_angles = 0.5* np.random.randn(3)
+        rotation = R.from_euler('xyz',
+                                euler_angles, degrees= False)
+    else:
+        rotation = R.random()
     q = rotation.as_quat()
     return np.hstack((q[-1], q[1:])) 
 
