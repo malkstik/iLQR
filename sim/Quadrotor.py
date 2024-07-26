@@ -20,7 +20,11 @@ from pydrake.all import (
 import numpy as np
 
 from pydrake.all import Variable
-from math.quaternions import hat, GetLeftMatrix, GetAttititudeJacobian, ParamToQuaternion, QuaternionToParam, QuaternionToRotation
+
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.getcwd(), os.pardir)))
+from maths.quaternions import hat, GetLeftMatrix, GetAttititudeJacobian, ParamToQuaternion, QuaternionToParam, QuaternionToRotation
 
 class QuadrotorGeometry(LeafSystem):
     def __init__(self, scene_graph: SceneGraph) -> None:

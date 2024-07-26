@@ -9,10 +9,9 @@ import numpy as np
 
 import os
 import sys
-sys.path.append(print(os.path.abspath(os.path.join(os.getcwd(), os.pardir))))
-
-from math.quaternions import GetAttititudeJacobian, QuaternionToParam, GetLeftMatrix
-from math.linalg import is_pos_def
+sys.path.append(os.path.abspath(os.path.join(os.getcwd(), os.pardir)))
+from maths.quaternions import GetAttititudeJacobian, QuaternionToParam, GetLeftMatrix
+from maths.linalg import is_pos_def
 
 
 
@@ -117,17 +116,22 @@ class QuadrotoriLQR(QuadrotorController):
         self.Tf = Tf
         self.dt = dt
 
+        self.nx = self.input_size
+        self.nu = self.output_size
+        self.num_time_steps = Tf/dt + 1
+
+
     def DoCalcVectorOutput(self, context: Context, quadrotor_state, not_used, motor_current):
         self.xtraj, self.utraj = self.control(quadrotor_state, self.xgoal, self.xtraj, self.utraj)
         motor_current[:] = self.utraj[0]
 
     def control(self, x0, xgoal, xtraj, utraj):
         self.xgoal = xgoal
-        p = None        #gradients
-        P= None         #hessians 
-        d= None         #feedforward
-        K= None         #feedback
-        deltaJ= None    #change to trajectory cost 
+        p = np.zeros((self.nx, self.num_time_steps))        #gradients
+        P= np.zeros((self.nx, self.nx, self.num_time_steps))         #hessians 
+        d= np.ones(self.num_time_steps-1)         #feedforward
+        K= np.zeros((self.nu, self.nx, self.num_time_steps-1))         #feedback
+        deltaJ= 0.0    #change to trajectory cost 
         xn= None        #state traj
         un= None        #action traj
         gx= None        #gradient x term
@@ -253,4 +257,4 @@ class QuadrotoriLQR(QuadrotorController):
         return G
     
 if __name__ == "__main__":
-    pass
+    print("run")
