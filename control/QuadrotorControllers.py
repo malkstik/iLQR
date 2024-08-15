@@ -3,7 +3,8 @@ from pydrake.all import (VectorSystem,
                          MultibodyPlant,
                          FirstOrderTaylorApproximation,
                          LinearQuadraticRegulator,
-                         Context)
+                         Context,
+                         Simulator)
 
 import numpy as np
 
@@ -26,7 +27,7 @@ class QuadrotorController(VectorSystem):
 
     def DoCalcVectorOutput(self, context: Context, quadrotor_state, not_used, motor_current):
         return NotImplemented
-    
+
     def Linearize(self, ref_state, ref_action):
         context = self.quadrotor.CreateDefaultContext()
         context.SetContinuousState(ref_state)
@@ -46,20 +47,44 @@ class QuadrotorController(VectorSystem):
         Bred = E.T @ sys.B()
 
         return Ared, Bred
+    
 
+    def Rollout(self, context, x0, U, dt):
+        """
+        Simulates the trajectory of states (rollout) for given initial state and control sequence.
+        """
+        context.SetContinuousState(x0)
+        X = [x0.copy()]
 
-    def _ComputeDifferentialState(self, state: np.ndarray):
+        for u in U:
+            # Set input and simulate a small time step
+            self.quadrotor.get_actuation_input_port().FixValue(context, u)
+            self.quadrotor.get_continuous_state_output_port().Calc(context, context.get_mutable_continuous_state_vector())
+            
+            # Use the plant's dynamics (or a numerical integrator) to step forward in time
+            # This should ideally be a single step of the plant's integrator
+            simulator = Simulator(self.plant, context)
+            simulator.AdvanceTo(simulator.get_context().get_time() + dt)
+
+            x_next = context.get_continuous_state_vector().CopyToVector()
+            X.append(x_next)
+
+        return np.array(X)
+
+    
+    def CreateDefaultContext(self):
+        return self.quadrotor.CreateDefaultContext()    
+    
+    def _ComputeDifferentialState(self, state: np.ndarray, ref_state: np.ndarray):
         '''
         Computes differential state accounting for quaternion kinematics
         '''
-        q_ref = self.ref_state[:4]
+        q_ref = ref_state[:4]
         q = state[:4]
         differential_quaternion = QuaternionToParam(GetLeftMatrix(q_ref).T @ q.reshape((4,1))
                                                     ).reshape((3))
-        return np.hstack((differential_quaternion, state[4:]- self.ref_state[4:]))
+        return np.hstack((differential_quaternion, state[4:]- ref_state[4:]))
     
-
-
 
 class QuadrotorLQR(QuadrotorController):
     """Define LQR controller for quadrotor using quaternion floating base
@@ -79,7 +104,6 @@ class QuadrotorLQR(QuadrotorController):
         ref_action = np.array([-mass * gravity / 4 for i in range(4)] )
         self.SetReferencePoint(ref_state, ref_action)
 
-
     def SetReferencePoint(self, ref_state: np.ndarray, ref_action: np.ndarray):
         '''
         Updates reference state and action then recomputes linearization and optimal feedback gain
@@ -97,8 +121,9 @@ class QuadrotorLQR(QuadrotorController):
 
 
     def DoCalcVectorOutput(self, context: Context, quadrotor_state: np.ndarray, not_used: np.ndarray, motor_current: np.ndarray):
-        differential_quadrotor_state = self._ComputeDifferentialState(quadrotor_state)
+        differential_quadrotor_state = self._ComputeDifferentialState(quadrotor_state, self.ref_state)
         motor_current[:] = self.ref_action - self.K @ differential_quadrotor_state   
+        
 
 class QuadrotoriLQR(QuadrotorController):
     def __init__(self, quadrotor: Diagram, 
@@ -116,8 +141,8 @@ class QuadrotoriLQR(QuadrotorController):
         self.Tf = Tf
         self.dt = dt
 
-        self.nx = self.input_size
-        self.nu = self.output_size
+        self.nx = self.get_input_port().size() -1 #differential state size
+        self.nu = self.get_output_port().size()
         self.num_time_steps = Tf/dt + 1
 
 
@@ -127,25 +152,26 @@ class QuadrotoriLQR(QuadrotorController):
 
     def control(self, x0, xgoal, xtraj, utraj):
         self.xgoal = xgoal
-        p = np.zeros((self.nx, self.num_time_steps))        #gradients
-        P= np.zeros((self.nx, self.nx, self.num_time_steps))         #hessians 
-        d= np.ones(self.num_time_steps-1)         #feedforward
-        K= np.zeros((self.nu, self.nx, self.num_time_steps-1))         #feedback
-        deltaJ= 0.0    #change to trajectory cost 
-        xn= None        #state traj
-        un= None        #action traj
-        gx= None        #gradient x term
-        gu= None        #gradient u term
-        Gxx= None       #Hessian xx term
-        Guu= None       #Hessian uu term
-        Gxu= None       #Hessian xu term
-        Gux= None       #Hessian ux term
+        p = np.zeros((self.nx, self.num_time_steps))            #gradients
+        P= np.zeros((self.nx, self.nx, self.num_time_steps))    #hessians 
+        d= np.ones((self.num_time_steps-1))                     #feedforward
+        K= np.zeros((self.nu, self.nx, self.num_time_steps-1))  #feedback
+        deltaJ= 0.0                                             #change to trajectory cost 
+        xn= np.zeros((self.nx, self.num_time_steps))            #state traj
+        un= np.zeros((self.nu, self.num_time_steps))            #action traj
+        # gx= np.zeros((self.nx))                                 #gradient x term
+        # gu= np.zeros((self.nu))                                 #gradient u term
+        # Gxx= np.zeros((self.nx, self.nx))                       #Hessian xx term
+        # Guu= np.zeros((self.nu, self.nu))                       #Hessian uu term
+        # Gxu= np.zeros((self.nx, self.nu))                       #Hessian xu term
+        # Gux= np.zeros((self.nu, self.nx))                       #Hessian ux term
 
 
-        #Initial rollout
-        for k in range (1, self.N-1):
-            xtraj[:, k+1] = self.dynamics_(xtraj[:, k], utraj[:, k])
+        #Initial Rollout
+        context = self.CreateDefaultContext()
+        xtraj = self.Rollout(context, x0, utraj, self.dt)
         J = self.cost_(xtraj, utraj)
+
 
         while np.maximum(np.abs(d)) > 1e-3:
 
@@ -169,7 +195,7 @@ class QuadrotoriLQR(QuadrotorController):
     def backward_pass(self, xtraj, utraj, p, P, d, K):
         deltaJ = 0
 
-        p[:, self.N] = self.Qn_*(xtraj[:, -1] - self.xgoal)
+        p[:, self.N] = self.Qn_*(self._ComputeDifferentialState(xtraj[:, -1], self.xgoal))
         P[:, :, self.N] = self.Qn_
 
         for k in range(self.N)[::-1]:
@@ -214,9 +240,10 @@ class QuadrotoriLQR(QuadrotorController):
     def forward_rollout(self, xtraj, utraj, d, K, alpha):
         xn = np.zeros(self.nx_, self.N)
         un = np.zeros(self.nu_, self.N-1)
+        context = self.CreateDefaultContext()
         for k in range(1, self.N-1):
-                un[:, k] = utraj[:, k] - alpha*d[k] - np.dot(K[:, :, k], xn[:, k] - xtraj[:, k])
-                xn[:, k+1] = self.f_(xn[:, k], un[:, k])
+                un[:, k] = utraj[:, k] - alpha*d[k] - np.dot(K[:, :, k], self._ComputeDifferentialState(xn[:, k], xtraj[:, k]))
+                xn[:, k+1] = self.Rollout(context, xn[:, k], un[:,k], self.dt)
         Jn = self.cost_(xn, un)
 
         return xn, un, Jn
@@ -225,13 +252,16 @@ class QuadrotoriLQR(QuadrotorController):
         '''
         Computes cost due to state and action trajectory
         '''
-        return 0.5*((x - self.xgoal).T @ self.Q_ @ (x - self.xgoal)) + 0.5* u.T*self.R_*u
+        
+        xerr = self._ComputeDifferentialState(x, self.xgoal)
+        return 0.5*(xerr.T @ self.Q_ @ xerr) + 0.5* u.T*self.R_*u
 
     def terminal_cost(self, xf: np.ndarray):
         '''
         Computes cost due to final state of state trajectory
         '''
-        return xf.T@self.Qf_@xf
+        xerr = self._ComputeDifferentialState(x, self.xgoal)
+        return xerr.T @ self.Qf @ xerr
 
 
     def cost(self, xtraj: np.ndarray, utraj: np.ndarray):
