@@ -1,4 +1,5 @@
-from pydrake.all import (VectorSystem,
+from pydrake.all import (LeafSystem,
+                         BasicVector,
                          Diagram,
                          MultibodyPlant,
                          FirstOrderTaylorApproximation,
@@ -16,16 +17,25 @@ from maths.linalg import is_pos_def
 
 
 
-class QuadrotorController(VectorSystem):
+class QuadrotorController(LeafSystem):
     """Base controller class for quadrotor using quaternion floating base
     """
     def __init__(self, quadrotor: Diagram, multibody_plant: MultibodyPlant):
             # 13 inputs (quadrotor state), 4 motor current outputs.
-            VectorSystem.__init__(self, 13, 4)
+            LeafSystem.__init__(self)
             self.quadrotor = quadrotor
             self.plant = multibody_plant
 
-    def DoCalcVectorOutput(self, context: Context, quadrotor_state, not_used, motor_current):
+            self.mass = multibody_plant.CalcTotalMass(multibody_plant.GetMyContextFromRoot(quadrotor.CreateDefaultContext()))
+
+
+            self.DeclareVectorInputPort("current_state", 13)
+            self.DeclareVectorInputPort("goal_state", 13)
+            self.DeclareVectorInputPort("ref_action", 4)
+            self.DeclareVectorOutputPort("control_output", 4, self.DoCalcVectorOutput)
+
+
+    def DoCalcVectorOutput(self, context: Context, motor_current: np.ndarray):
         return NotImplemented
 
     def Linearize(self, ref_state, ref_action):
@@ -98,13 +108,22 @@ class QuadrotorLQR(QuadrotorController):
         self.Q = Q
         self.R = R
 
-        mass = multibody_plant.CalcTotalMass(multibody_plant.GetMyContextFromRoot(quadrotor.CreateDefaultContext()))
-        ref_state = np.array([1., 0., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0., 0.])
-        gravity = multibody_plant.gravity_field().gravity_vector()[2]
-        ref_action = np.array([-mass * gravity / 4 for i in range(4)] )
-        self.SetReferencePoint(ref_state, ref_action)
+        self.ref_state = np.array([1., 0., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0., 0.])
+        self.ref_action = np.zeros(4)
 
-    def SetReferencePoint(self, ref_state: np.ndarray, ref_action: np.ndarray):
+        # self._SetReferencePoint(self.ref_state, self.ref_action)
+
+    def DoCalcVectorOutput(self, context: Context, motor_current: BasicVector):
+        current_state = self.get_input_port(0).Eval(context)
+        goal_state = self.get_input_port(1).Eval(context)
+        ref_action = self.get_input_port(2).Eval(context)
+        self._SetReferencePoint(goal_state, ref_action)
+
+        differential_quadrotor_state = self._ComputeDifferentialState(current_state, self.ref_state)
+        # motor_current[:] = self.ref_action - self.K @ differential_quadrotor_state   
+        motor_current.SetFromVector(self.ref_action - self.K @ differential_quadrotor_state)
+        
+    def _SetReferencePoint(self, ref_state: np.ndarray, ref_action: np.ndarray):
         '''
         Updates reference state and action then recomputes linearization and optimal feedback gain
         :param ref_state: reference state consisting of 
@@ -113,17 +132,14 @@ class QuadrotorLQR(QuadrotorController):
         :param ref_action: reference action consisting of 
         [motor_current_i for i in [0, 1, 2, 3]]
         '''
+        if (self.ref_state == ref_state).all() and (self.ref_action == ref_action).all():
+            return
+
         self.ref_state = ref_state
         self.ref_action = ref_action
 
         A, B = self.Linearize(ref_state, ref_action)
-        self.K, _ = LinearQuadraticRegulator(A, B, self.Q, self.R)
-
-
-    def DoCalcVectorOutput(self, context: Context, quadrotor_state: np.ndarray, not_used: np.ndarray, motor_current: np.ndarray):
-        differential_quadrotor_state = self._ComputeDifferentialState(quadrotor_state, self.ref_state)
-        motor_current[:] = self.ref_action - self.K @ differential_quadrotor_state   
-        
+        self.K, _ = LinearQuadraticRegulator(A, B, self.Q, self.R)        
 
 class QuadrotoriLQR(QuadrotorController):
     def __init__(self, quadrotor: Diagram, 
@@ -141,17 +157,22 @@ class QuadrotoriLQR(QuadrotorController):
         self.Tf = Tf
         self.dt = dt
 
-        self.nx = self.get_input_port().size() -1 #differential state size
-        self.nu = self.get_output_port().size()
+        self.nx = 12 #differential state size
+        self.nu = 4
         self.num_time_steps = Tf/dt + 1
 
 
-    def DoCalcVectorOutput(self, context: Context, quadrotor_state, not_used, motor_current):
-        self.xtraj, self.utraj = self.control(quadrotor_state, self.xgoal, self.xtraj, self.utraj)
+    def DoCalcVectorOutput(self, context: Context, quadrotorEndpoints, not_used, motor_current):
+        current_state = self.get_input_port(0).Eval(context)
+        goal_state = self.get_input_port(1).Eval(context)
+        
+        #TODO: handle self.xtraj and self.utraj inits 
+        self.xtraj, self.utraj = self.control(current_state, goal_state, self.xtraj, self.utraj)
         motor_current[:] = self.utraj[0]
 
     def control(self, x0, xgoal, xtraj, utraj):
         self.xgoal = xgoal
+
         p = np.zeros((self.nx, self.num_time_steps))            #gradients
         P= np.zeros((self.nx, self.nx, self.num_time_steps))    #hessians 
         d= np.ones((self.num_time_steps-1))                     #feedforward
