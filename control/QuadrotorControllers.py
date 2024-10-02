@@ -8,7 +8,7 @@ from pydrake.all import (LeafSystem,
                          Simulator)
 
 import numpy as np
-
+import math 
 import os
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), os.pardir)))
@@ -59,25 +59,32 @@ class QuadrotorController(LeafSystem):
         return Ared, Bred
     
 
-    def Rollout(self, context, x0, U, dt):
+    def Rollout(self, x0: np.ndarray, U: np.ndarray, dt: float):
         """
         Simulates the trajectory of states (rollout) for given initial state and control sequence.
         """
-        context.SetContinuousState(x0)
-        X = [x0.copy()]
+        X = [x0.copy().tolist()]
+
+        simulator = Simulator(self.quadrotor)
+        simulator_context = simulator.get_mutable_context()
+        simulator_context.SetContinuousState(x0)
 
         for u in U:
             # Set input and simulate a small time step
-            self.quadrotor.get_actuation_input_port().FixValue(context, u)
-            self.quadrotor.get_continuous_state_output_port().Calc(context, context.get_mutable_continuous_state_vector())
+
+            self.quadrotor.get_input_port().FixValue(simulator_context, u)
+            # self.quadrotor.get_continuous_state_output_port().Calc(context, context.get_mutable_continuous_state_vector())
             
             # Use the plant's dynamics (or a numerical integrator) to step forward in time
             # This should ideally be a single step of the plant's integrator
-            simulator = Simulator(self.plant, context)
-            simulator.AdvanceTo(simulator.get_context().get_time() + dt)
+            # simulator = Simulator(self.plant, context)
+            sim_time = simulator_context.get_time()
+            simulator.AdvanceTo(sim_time + dt)
 
-            x_next = context.get_continuous_state_vector().CopyToVector()
+            x_next = simulator_context.get_continuous_state_vector().CopyToVector()
             X.append(x_next)
+
+            # print(f"time: {sim_time + dt} \nx_next: {x_next} \nu: {u} \n")
 
         return np.array(X)
 
@@ -111,7 +118,7 @@ class QuadrotorLQR(QuadrotorController):
         self.ref_state = np.array([1., 0., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0., 0.])
         self.ref_action = np.zeros(4)
 
-        # self._SetReferencePoint(self.ref_state, self.ref_action)
+        self._SetReferencePoint(self.ref_state, self.ref_action)
 
     def DoCalcVectorOutput(self, context: Context, motor_current: BasicVector):
         current_state = self.get_input_port(0).Eval(context)
@@ -151,24 +158,33 @@ class QuadrotoriLQR(QuadrotorController):
                  dt: float):
         
         super().__init__(quadrotor, multibody_plant)
-        self.Q = Q
-        self.R = R
-        self.Qf = Qf
-        self.Tf = Tf
-        self.dt = dt
+        self.Q: np.ndarray = Q
+        self.R: np.ndarray = R
+        self.Qf: np.ndarray = Qf
+        self.Tf: float = Tf
+        self.dt: float = dt
 
         self.nx = 12 #differential state size
         self.nu = 4
-        self.num_time_steps = Tf/dt + 1
+        self.num_time_steps: int = math.floor(Tf/dt) + 1
 
+        self.xtraj: np.ndarray = np.zeros((self.num_time_steps, self.nx+1))
+        self.utraj: np.ndarray = np.zeros((self.num_time_steps-1, self.nu))
 
-    def DoCalcVectorOutput(self, context: Context, quadrotorEndpoints, not_used, motor_current):
+    def InitTraj(self, x0: np.ndarray, utraj: np.ndarray):
+        
+        self.xtraj[:] = np.kron(np.ones(self.num_time_steps, 1), x0)
+        self.utraj[:] = utraj
+
+    def DoCalcVectorOutput(self, context: Context, motor_current: BasicVector):
         current_state = self.get_input_port(0).Eval(context)
         goal_state = self.get_input_port(1).Eval(context)
-        
-        #TODO: handle self.xtraj and self.utraj inits 
+
+        if not self.xtraj.any() and not self.utraj.any():
+            self.xtraj[:] = np.kron(np.ones((self.num_time_steps, 1)), current_state)
+            self.utraj[:] = np.random.randn(self.num_time_steps-1, self.nu)
         self.xtraj, self.utraj = self.control(current_state, goal_state, self.xtraj, self.utraj)
-        motor_current[:] = self.utraj[0]
+        motor_current.SetFromVector(self.utraj[0])
 
     def control(self, x0, xgoal, xtraj, utraj):
         self.xgoal = xgoal
@@ -189,9 +205,9 @@ class QuadrotoriLQR(QuadrotorController):
 
 
         #Initial Rollout
-        context = self.CreateDefaultContext()
-        xtraj = self.Rollout(context, x0, utraj, self.dt)
-        J = self.cost_(xtraj, utraj)
+        # context = self.quadrotor.CreateDefaultContext()
+        xtraj = self.Rollout(x0, utraj, self.dt)
+        J = self.cost(xtraj, utraj)
 
 
         while np.maximum(np.abs(d)) > 1e-3:
@@ -216,7 +232,7 @@ class QuadrotoriLQR(QuadrotorController):
     def backward_pass(self, xtraj, utraj, p, P, d, K):
         deltaJ = 0
 
-        p[:, self.N] = self.Qn_*(self._ComputeDifferentialState(xtraj[:, -1], self.xgoal))
+        p[:, self.N] = self.Qn_ @ (self._ComputeDifferentialState(xtraj[:, -1], self.xgoal)).T
         P[:, :, self.N] = self.Qn_
 
         for k in range(self.N)[::-1]:
