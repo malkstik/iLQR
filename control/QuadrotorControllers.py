@@ -62,8 +62,15 @@ class QuadrotorController(LeafSystem):
     def Rollout(self, x0: np.ndarray, U: np.ndarray, dt: float):
         """
         Simulates the trajectory of states (rollout) for given initial state and control sequence.
+
+        :param x0: initial state, ndarray of shape (nx,)
+        :param U: sequence of actions, ndarray of shape (num_time_steps-1, nu)
+        :param dt: 
+
+        :return x: sequence of states from rollout, ndarray of shape (num_time_steps, nx)
         """
         X = [x0.copy().tolist()]
+
 
         simulator = Simulator(self.quadrotor)
         simulator_context = simulator.get_mutable_context()
@@ -73,7 +80,6 @@ class QuadrotorController(LeafSystem):
             # Set input and simulate a small time step
 
             self.quadrotor.get_input_port().FixValue(simulator_context, u)
-            # self.quadrotor.get_continuous_state_output_port().Calc(context, context.get_mutable_continuous_state_vector())
             
             # Use the plant's dynamics (or a numerical integrator) to step forward in time
             # This should ideally be a single step of the plant's integrator
@@ -82,6 +88,7 @@ class QuadrotorController(LeafSystem):
             simulator.AdvanceTo(sim_time + dt)
 
             x_next = simulator_context.get_continuous_state_vector().CopyToVector()
+
             X.append(x_next)
 
             # print(f"time: {sim_time + dt} \nx_next: {x_next} \nu: {u} \n")
@@ -95,12 +102,19 @@ class QuadrotorController(LeafSystem):
     def _ComputeDifferentialState(self, state: np.ndarray, ref_state: np.ndarray):
         '''
         Computes differential state accounting for quaternion kinematics
+
+        :param state: ndarray of shape (batch, nx)
+        :param ref_state: ndarray of shape (nx,)
+
+        :return: ndarray of shape (batch, nx-1)
         '''
+
         q_ref = ref_state[:4]
-        q = state[:4]
-        differential_quaternion = QuaternionToParam(GetLeftMatrix(q_ref).T @ q.reshape((4,1))
-                                                    ).reshape((3))
-        return np.hstack((differential_quaternion, state[4:]- ref_state[4:]))
+        q = state[:,:4]
+
+        differential_quaternion = QuaternionToParam(GetLeftMatrix(q_ref).T @ q.T).T
+        return np.hstack((differential_quaternion, state[:, 4:] - ref_state[4:]))
+
     
 
 class QuadrotorLQR(QuadrotorController):
@@ -126,9 +140,10 @@ class QuadrotorLQR(QuadrotorController):
         ref_action = self.get_input_port(2).Eval(context)
         self._SetReferencePoint(goal_state, ref_action)
 
-        differential_quadrotor_state = self._ComputeDifferentialState(current_state, self.ref_state)
+        differential_quadrotor_state = self._ComputeDifferentialState(current_state.reshape((1, -1)), self.ref_state)
         # motor_current[:] = self.ref_action - self.K @ differential_quadrotor_state   
-        motor_current.SetFromVector(self.ref_action - self.K @ differential_quadrotor_state)
+
+        motor_current.SetFromVector((self.ref_action - differential_quadrotor_state @ self.K.T).squeeze())
         
     def _SetReferencePoint(self, ref_state: np.ndarray, ref_action: np.ndarray):
         '''
@@ -204,6 +219,7 @@ class QuadrotoriLQR(QuadrotorController):
         # Gux= np.zeros((self.nu, self.nx))                       #Hessian ux term
 
 
+
         #Initial Rollout
         # context = self.quadrotor.CreateDefaultContext()
         xtraj = self.Rollout(x0, utraj, self.dt)
@@ -217,10 +233,11 @@ class QuadrotoriLQR(QuadrotorController):
             # Forward rollout with line search
             xn[:, 1] = xtraj[:, 1]
             alpha = 1.0
-
+    
             xn, un, Jn = self.forward_rollout(self, xtraj, utraj, d, K, alpha)
             while np.isnan(Jn) or Jn > (J - 1e-2 * alpha * deltaJ):
                 xn, un, Jn = self.forward_rollout(self, xtraj, utraj, d, K, alpha)
+
 
             J = Jn
             xtraj = xn
@@ -232,10 +249,10 @@ class QuadrotoriLQR(QuadrotorController):
     def backward_pass(self, xtraj, utraj, p, P, d, K):
         deltaJ = 0
 
-        p[:, self.N] = self.Qn_ @ (self._ComputeDifferentialState(xtraj[:, -1], self.xgoal)).T
-        P[:, :, self.N] = self.Qn_
+        p[:, self.num_time_steps] = self.Qn_ @ self._ComputeDifferentialState(xtraj[:, -1], self.xgoal)
+        P[:, :, self.num_time_steps] = self.Qn_
 
-        for k in range(self.N)[::-1]:
+        for k in range(self.num_time_steps)[::-1]:
             xk, uk = xtraj[:, k], utraj[:, k] 
             q = self.Q_ @ (xk-self.xgoal)
             r = self.R_ @ uk
@@ -275,40 +292,53 @@ class QuadrotoriLQR(QuadrotorController):
         return deltaJ, K
     
     def forward_rollout(self, xtraj, utraj, d, K, alpha):
-        xn = np.zeros(self.nx_, self.N)
-        un = np.zeros(self.nu_, self.N-1)
+        xn = np.zeros(self.nx_, self.num_time_steps)
+        un = np.zeros(self.nu_, self.num_time_steps-1)
         context = self.CreateDefaultContext()
-        for k in range(1, self.N-1):
-                un[:, k] = utraj[:, k] - alpha*d[k] - np.dot(K[:, :, k], self._ComputeDifferentialState(xn[:, k], xtraj[:, k]))
+
+        for k in range(1, self.num_time_steps-1):
+                un[:, k] = utraj[:, k] - alpha*d[k] - K[:, :, k] @ self._ComputeDifferentialState(xn[:, k], xtraj[:, k])
                 xn[:, k+1] = self.Rollout(context, xn[:, k], un[:,k], self.dt)
-        Jn = self.cost_(xn, un)
+        Jn = self.cost(xn, un)
 
         return xn, un, Jn
 
     def stage_cost(self, x: np.ndarray, u: np.ndarray):
         '''
         Computes cost due to state and action trajectory
+
+        :param xtraj: state trajectory, ndarray of shape (num_time_steps-1, nx)
+        :param utraj: action trajectory, ndarray of shape (num_time_steps-1, nu)
         '''
-        
+
+
         xerr = self._ComputeDifferentialState(x, self.xgoal)
+
         return 0.5*(xerr.T @ self.Q_ @ xerr) + 0.5* u.T*self.R_*u
 
     def terminal_cost(self, xf: np.ndarray):
         '''
         Computes cost due to final state of state trajectory
         '''
-        xerr = self._ComputeDifferentialState(x, self.xgoal)
+        xerr = self._ComputeDifferentialState(xf, self.xgoal)
         return xerr.T @ self.Qf @ xerr
 
 
     def cost(self, xtraj: np.ndarray, utraj: np.ndarray):
         '''
         Computes total cost of trajectory
+        :param xtraj: state trajectory, ndarray of shape (num_time_steps, nx)
+        :param utraj: action trajectory, ndarray of shape (num_time_steps-1, nu)
+
         '''
         J = 0
-        xf = xtraj[:, -1]
-        for k in range(self.N-1):
-            J += self.stage_cost_(xtraj[:,:-1], utraj)
+        xf = xtraj[-1, :]
+
+        print(xtraj.shape)
+
+        for k in range(self.num_time_steps-1):
+            J += self.stage_cost(xtraj[:-1,:], utraj)
+            
         J += self.terminal_cost_(xf)
 
         return J
