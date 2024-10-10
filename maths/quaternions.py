@@ -48,9 +48,12 @@ def ParamToQuaternion(phi):
     '''
     return 1/np.sqrt(1 + np.dot(phi, phi)) * np.hstack((np.ones(1), phi.reshape((3,1))))
 
-def QuaternionToParam(q: Quaternion):
+def QuaternionToParam(q: Quaternion) -> np.ndarray:
     '''
     Convert quaternion to 3 parameter representation
+    :param q: quaternion of shape (4, num_quaternions)
+
+    :return : 3 parameter quaternion representation of shape (3, num_quaternions)
     '''
     return q[1:]/q[0]
 
