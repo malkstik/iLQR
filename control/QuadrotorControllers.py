@@ -254,8 +254,8 @@ class QuadrotoriLQR(QuadrotorController):
 
         for k in range(self.num_time_steps)[::-1]:
             xk, uk = xtraj[:, k], utraj[:, k] 
-            q = self.Q_ @ (xk-self.xgoal)
-            r = self.R_ @ uk
+            q = self.Q @ (xk-self.xgoal)
+            r = self.R @ uk
 
             # Linearization
             A, B = self.Linearize(xk, uk)
@@ -310,11 +310,15 @@ class QuadrotoriLQR(QuadrotorController):
         :param xtraj: state trajectory, ndarray of shape (num_time_steps-1, nx)
         :param utraj: action trajectory, ndarray of shape (num_time_steps-1, nu)
         '''
-
-
         xerr = self._ComputeDifferentialState(x, self.xgoal)
 
-        return 0.5*(xerr.T @ self.Q_ @ xerr) + 0.5* u.T*self.R_*u
+        # Weighted errors
+        weighted_state_errors = xerr @ self.Q  # Shape (15, 12)
+        weighted_action = u @ self.R
+
+        state_cost = np.sum(weighted_state_errors * xerr) 
+        action_cost = np.sum(weighted_action * u)
+        return 0.5*state_cost + 0.5* action_cost
 
     def terminal_cost(self, xf: np.ndarray):
         '''
@@ -334,11 +338,8 @@ class QuadrotoriLQR(QuadrotorController):
         J = 0
         xf = xtraj[-1, :]
 
-        print(xtraj.shape)
-
         for k in range(self.num_time_steps-1):
             J += self.stage_cost(xtraj[:-1,:], utraj)
-            
         J += self.terminal_cost_(xf)
 
         return J
