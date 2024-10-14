@@ -325,7 +325,8 @@ class QuadrotoriLQR(QuadrotorController):
         Computes cost due to final state of state trajectory
         '''
         xerr = self._ComputeDifferentialState(xf, self.xgoal)
-        return xerr.T @ self.Qf @ xerr
+        
+        return 0.5 * np.sum((xerr @ self.Qf) * xerr)
 
 
     def cost(self, xtraj: np.ndarray, utraj: np.ndarray):
@@ -336,12 +337,13 @@ class QuadrotoriLQR(QuadrotorController):
 
         '''
         J = 0
-        xf = xtraj[-1, :]
+        xf = np.expand_dims(xtraj[-1, :], 0)
+
 
         for k in range(self.num_time_steps-1):
             J += self.stage_cost(xtraj[:-1,:], utraj)
-        J += self.terminal_cost_(xf)
 
+        J += self.terminal_cost(xf)
         return J
 
     def full_hessian(self, Gxx: np.ndarray, Gxu: np.ndarray, Gux: np.ndarray, Guu: np.ndarray)-> np.ndarray:
