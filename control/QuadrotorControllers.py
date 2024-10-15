@@ -204,13 +204,11 @@ class QuadrotoriLQR(QuadrotorController):
     def control(self, x0, xgoal, xtraj, utraj):
         self.xgoal = xgoal
 
-        p = np.zeros((self.nx, self.num_time_steps))            #gradients
-        P= np.zeros((self.nx, self.nx, self.num_time_steps))    #hessians 
-        d= np.ones((self.num_time_steps-1))                     #feedforward
-        K= np.zeros((self.nu, self.nx, self.num_time_steps-1))  #feedback
+        p = np.zeros((self.num_time_steps, self.nx))            #gradients
+        P= np.zeros((self.num_time_steps, self.nx, self.nx))    #hessians 
+        d= np.ones((self.num_time_steps-1, self.nu))                     #feedforward
+        K= np.zeros((self.num_time_steps-1, self.nu, self.nx))  #feedback
         deltaJ= 0.0                                             #change to trajectory cost 
-        xn= np.zeros((self.nx, self.num_time_steps))            #state traj
-        un= np.zeros((self.nu, self.num_time_steps))            #action traj
         # gx= np.zeros((self.nx))                                 #gradient x term
         # gu= np.zeros((self.nu))                                 #gradient u term
         # Gxx= np.zeros((self.nx, self.nx))                       #Hessian xx term
@@ -221,23 +219,16 @@ class QuadrotoriLQR(QuadrotorController):
 
 
         #Initial Rollout
-        # context = self.quadrotor.CreateDefaultContext()
         xtraj = self.Rollout(x0, utraj, self.dt)
         J = self.cost(xtraj, utraj)
+        while np.max(np.abs(d)) > 1e-3:
 
-
-        while np.maximum(np.abs(d)) > 1e-3:
-
-            deltaJ, K = self.backward_pass_(xn, un, p, P, d, K)
-
+            deltaJ, K = self.backward_pass(xtraj, utraj, p, P, d, K)
             # Forward rollout with line search
-            xn[:, 1] = xtraj[:, 1]
             alpha = 1.0
-    
-            xn, un, Jn = self.forward_rollout(self, xtraj, utraj, d, K, alpha)
+            xn[:], un[:], Jn = self.forward_rollout(xtraj, utraj, d, K, alpha)
             while np.isnan(Jn) or Jn > (J - 1e-2 * alpha * deltaJ):
-                xn, un, Jn = self.forward_rollout(self, xtraj, utraj, d, K, alpha)
-
+                xn, un, Jn = self.forward_rollout(xtraj, utraj, d, K, alpha)
 
             J = Jn
             xtraj = xn
@@ -248,31 +239,32 @@ class QuadrotoriLQR(QuadrotorController):
     
     def backward_pass(self, xtraj, utraj, p, P, d, K):
         deltaJ = 0
+        
+        p[self.num_time_steps-1, :] = (self.Q @ self._ComputeDifferentialState(np.expand_dims(xtraj[-1, :], 0),
+                                                                                            self.xgoal).T).squeeze()
+        P[self.num_time_steps-1, :, :] = self.Q
 
-        p[:, self.num_time_steps] = self.Qn_ @ self._ComputeDifferentialState(xtraj[:, -1], self.xgoal)
-        P[:, :, self.num_time_steps] = self.Qn_
-
-        for k in range(self.num_time_steps)[::-1]:
-            xk, uk = xtraj[:, k], utraj[:, k] 
-            q = self.Q @ (xk-self.xgoal)
+        for k in range(self.num_time_steps-1)[::-1]:
+            xk, uk = xtraj[k, :], utraj[k, :] 
+            q = self.Q @ self._ComputeDifferentialState(np.expand_dims(xk, 0), self.xgoal).T
             r = self.R @ uk
 
             # Linearization
             A, B = self.Linearize(xk, uk)
 
             # Action value gradient terms
-            gx = q + A.T @ p[:, k+1]
-            gu = r + B.T @ p[:, k+1]
+            gx = q.squeeze() + A.T @ p[k+1, :]
+            gu = r.squeeze() + B.T @ p[k+1, :]
 
             # Action value hessian terms
-            Gxx = self.Q + A.T @ P[:, :, k+1] @ A
-            Guu = self.R + B.T @ P[:, :, k+1] @ B
-            Gxu = A.T @ P[:, :, k+1] @ B
-            Gux = B.T @ P[:, :, k+1] @ A
+            Gxx = self.Q + A.T @ P[k+1, :, :] @ A
+            Guu = self.R + B.T @ P[k+1, :, :] @ B
+            Gxu = A.T @ P[k+1, :, :] @ B
+            Gux = B.T @ P[k+1, :, :] @ A
 
             #Regularize
             beta = 0.1
-            while not is_pos_def(self.full_hessian_(Gxx, Gxu, Gux, Guu)):
+            while not is_pos_def(self.full_hessian(Gxx, Gxu, Gux, Guu)):
                 Gxx += beta * A.T @ A
                 Guu += beta * B.T @ B
                 Gxu += beta * A.T @ B
@@ -280,25 +272,30 @@ class QuadrotoriLQR(QuadrotorController):
                 beta *= 2
                 
             # Feedforward term
-            d[k] = np.linalg.inv(Guu) @ gu
+            d[k, :] = np.linalg.inv(Guu) @ gu
+
             # Feedback term
-            K[:, :, k] = np.linalg.inv(Guu) @ Gux
+            K[k, :, :] = np.linalg.inv(Guu) @ Gux
 
             #update p and P
-            p[:, k] = (gx - K[:, :, k].T @ gu + K[:, :, k].T @ Guu @ d[k] - Gxu @ d[k]).squeeze()
-            P[:, :, k] = Gxx + K[:, :, k].T @ Guu @ K[:, :, k] - K[:, :, k].T @ Gux
+            p[k, :] = (gx - K[k, :, :].T @ gu + K[k, :, :].T @ Guu @ d[k] - Gxu @ d[k, :])
+            P[k, :, :] = Gxx + K[k, :, :].T @ Guu @ K[k, :, :] - K[k, :, :].T @ Gux
             
             deltaJ += gu.T @ d[k] 
         return deltaJ, K
     
     def forward_rollout(self, xtraj, utraj, d, K, alpha):
-        xn = np.zeros(self.nx_, self.num_time_steps)
-        un = np.zeros(self.nu_, self.num_time_steps-1)
-        context = self.CreateDefaultContext()
+        xn = np.zeros((self.num_time_steps, self.nx+1))
+        xn[:, 1] = xtraj[:, 1]
+
+        un = np.zeros((self.num_time_steps-1, self.nu))
 
         for k in range(1, self.num_time_steps-1):
-                un[:, k] = utraj[:, k] - alpha*d[k] - K[:, :, k] @ self._ComputeDifferentialState(xn[:, k], xtraj[:, k])
-                xn[:, k+1] = self.Rollout(context, xn[:, k], un[:,k], self.dt)
+                t3 = self._ComputeDifferentialState(np.expand_dims(xn[k, :],0), xtraj[k, :])
+                print()
+                un[k, :] = utraj[k, :] - alpha*d[k, :] - (K[k, :, :] @ self._ComputeDifferentialState(np.expand_dims(xn[k, :],0),
+                                                                                                   xtraj[k, :]).T).squeeze()
+                xn[k + 1, :] = self.Rollout(xn[k, :], np.expand_dims(un[k, :], 0), self.dt)[1,:]
         Jn = self.cost(xn, un)
 
         return xn, un, Jn
@@ -338,8 +335,6 @@ class QuadrotoriLQR(QuadrotorController):
         '''
         J = 0
         xf = np.expand_dims(xtraj[-1, :], 0)
-
-
         for k in range(self.num_time_steps-1):
             J += self.stage_cost(xtraj[:-1,:], utraj)
 
