@@ -55,6 +55,7 @@ def QuaternionToParam(q: Quaternion) -> np.ndarray:
 
     :return : 3 parameter quaternion representation of shape (3, num_quaternions)
     '''
+    q /= np.linalg.norm(q) #ensure quaternions are of norm 1
     return q[1:]/q[0]
 
 def QuaternionToRotation(q: Quaternion):
