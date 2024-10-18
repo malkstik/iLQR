@@ -183,8 +183,7 @@ class QuadrotoriLQR(QuadrotorController):
                  R: np.ndarray,
                  Qf: np.ndarray,
                  Tf: float,
-                 dt: float,
-                 max_current: float = 2000.0):
+                 dt: float):
         
         super().__init__(quadrotor, multibody_plant)
         self.Q: np.ndarray = Q
@@ -200,13 +199,10 @@ class QuadrotoriLQR(QuadrotorController):
         self.xtraj: np.ndarray = np.zeros((self.num_time_steps, self.nx+1))
         self.utraj: np.ndarray = np.zeros((self.num_time_steps-1, self.nu))
 
-        self.action_limit = max_current*np.ones(self.nu)
-
     def InitTraj(self, x0: np.ndarray, utraj: np.ndarray):
         
         self.xtraj[:] = np.kron(np.ones(self.num_time_steps, 1), x0)
         self.utraj[:] = utraj
-
 
     def DoCalcVectorOutput(self, context: Context, motor_current: BasicVector):
         current_state = self.get_input_port(0).Eval(context)
@@ -223,7 +219,7 @@ class QuadrotoriLQR(QuadrotorController):
         self.xgoal = xgoal
 
         #Initial Rollout
-        xtraj = self.Rollout(x0, utraj, self.dt) 
+        xtraj = self.Rollout(x0, utraj, self.dt)
         J = self.cost(xtraj, utraj)
 
         d = np.ones((self.num_time_steps-1, self.nu))            #feedforward
@@ -276,7 +272,6 @@ class QuadrotoriLQR(QuadrotorController):
 
             #Regularize
             beta = 0.1
-
             while not is_pos_def(self.full_hessian(Gxx, Gxu, Gux, Guu)):
                 Gxx += beta * A.T @ A
                 Guu += beta * B.T @ B
@@ -298,7 +293,6 @@ class QuadrotoriLQR(QuadrotorController):
         return deltaJ, K, d
     
     def forward_rollout(self, xtraj, utraj, d, K, alpha):
-        # print(xtraj)
         xn = np.zeros((self.num_time_steps, self.nx+1))
         xn[0, :] = xtraj[0, :]
         un = np.zeros((self.num_time_steps-1, self.nu))
@@ -314,7 +308,7 @@ class QuadrotoriLQR(QuadrotorController):
 
             # print(f"Rollout {k} \n State: {xn[k, :]} \n Action: {un[k, :]} \n\n")
         Jn = self.cost(xn, un)
-        print(Jn)
+
         return xn, un, Jn
 
     def stage_cost(self, x: np.ndarray, u: np.ndarray):
@@ -331,7 +325,6 @@ class QuadrotoriLQR(QuadrotorController):
 
         state_cost = np.sum(weighted_state_errors * xerr) 
         action_cost = np.sum(weighted_action * u)
-
         return 0.5*state_cost + 0.5* action_cost
 
     def terminal_cost(self, xf: np.ndarray):
@@ -353,9 +346,7 @@ class QuadrotoriLQR(QuadrotorController):
         J = 0
         xf = np.expand_dims(xtraj[-1, :], 0)
         for k in range(self.num_time_steps-1):
-            sc = self.stage_cost(xtraj[:-1,:], utraj)
-            J += sc
-
+            J += self.stage_cost(xtraj[:-1,:], utraj)
 
         J += self.terminal_cost(xf)
         return J
