@@ -13,7 +13,7 @@ import os
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), os.pardir)))
 from maths.quaternions import GetAttititudeJacobian, QuaternionToParam, GetLeftMatrix
-from maths.linalg import is_pos_def
+from maths import linalg 
 
 
 
@@ -129,6 +129,17 @@ class QuadrotorController(LeafSystem):
         return np.hstack((differential_quaternion, state[:, 4:] - ref_state[4:]))
 
     
+    def _OneStepRollout(self, x, u):
+        context = self.plant.CreateDefaultContext()
+        input_port = context.get_input_port()
+        
+        context.SetDiscreteState(x)
+        input_port.FixValue(context, u)
+
+        state = context.get_discrete_state()
+        self.plant.CalcForcedDiscreteVariableUpdate(context, state)
+        return state.get_vector().value().flatten()
+
 
 class QuadrotorLQR(QuadrotorController):
     """Define LQR controller for quadrotor using quaternion floating base
@@ -210,7 +221,7 @@ class QuadrotoriLQR(QuadrotorController):
 
         if not self.xtraj.any() and not self.utraj.any():
             self.xtraj[:] = np.kron(np.ones((self.num_time_steps, 1)), current_state) #Maybe consider only passing x0 since this gets overwritten in self.control
-            self.utraj[:] = 50* np.random.randn(self.num_time_steps-1, self.nu)
+            self.utraj[:] = 1000* np.random.randn(self.num_time_steps-1, self.nu)
 
         self.xtraj, self.utraj = self.control(current_state, goal_state, self.xtraj, self.utraj)
         motor_current.SetFromVector(self.utraj[0])
@@ -225,7 +236,7 @@ class QuadrotoriLQR(QuadrotorController):
         d = np.ones((self.num_time_steps-1, self.nu))            #feedforward
 
         iter = 0
-        while np.max(np.linalg.norm(d, axis = 0)) > 1e-3:
+        while np.max(np.linalg.norm(d, axis = 0)) > 1.5:
             iter += 1
             gradV = np.zeros((self.num_time_steps, self.nx))             #gradients
             hessV = np.zeros((self.num_time_steps, self.nx, self.nx))    #hessians 
@@ -241,6 +252,7 @@ class QuadrotoriLQR(QuadrotorController):
                 alpha *= 0.5
                 xtraj, utraj, Jn = self.forward_rollout(xtraj, utraj, d, K, alpha)
             J = Jn
+            print(iter)
         return xtraj, utraj
     
     
@@ -272,24 +284,28 @@ class QuadrotoriLQR(QuadrotorController):
 
             #Regularize
             beta = 0.1
-            while not is_pos_def(self.full_hessian(Gxx, Gxu, Gux, Guu)):
-                Gxx += beta * A.T @ A
-                Guu += beta * B.T @ B
-                Gxu += beta * A.T @ B
-                Gux += beta * B.T @ A
-                beta *= 2
+            while not linalg.is_pos_def(self.full_hessian(Gxx, Gxu, Gux, Guu)):
+                regularizer = beta * np.eye((A.shape[0]))
+
+                Gxx += A.T @ regularizer @ A
+                Guu += B.T @ regularizer @ B
+                Gxu += A.T @ regularizer @ B
+                Gux += B.T @ regularizer @ A
                 
+                beta *= 2
+
             # Feedforward term
-            d[k, :] = np.linalg.inv(Guu) @ gu
+            d[k, :] = linalg.qr_inverse(Guu) @ gu
 
             # Feedback term
-            K[k, :, :] = np.linalg.inv(Guu) @ Gux
+            K[k, :, :] = linalg.qr_inverse(Guu) @ Gux
 
             #update action value gradient and hessian
             gradV[k, :] = (gx - K[k, :, :].T @ gu + K[k, :, :].T @ Guu @ d[k, :] - Gxu @ d[k, :])
             hessV[k, :, :] = Gxx + K[k, :, :].T @ Guu @ K[k, :, :] - K[k, :, :].T @ Gux
             
             deltaJ += gu.T @ d[k, :] 
+
         return deltaJ, K, d
     
     def forward_rollout(self, xtraj, utraj, d, K, alpha):
