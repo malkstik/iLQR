@@ -44,5 +44,9 @@ def controllability_matrix(A, B):
         C = np.hstack((C, np.linalg.matrix_power(A, i) @ B))
     return C
 
+def is_controllable(A, B) -> bool:
+    return not is_singular(controllability_matrix(A,B))
+
+
 if __name__ == "__main__":
     print(is_pos_def(-1*np.eye(3)))
