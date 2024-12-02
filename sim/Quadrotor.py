@@ -28,6 +28,21 @@ from maths.quaternions import hat, GetLeftMatrix, GetAttititudeJacobian, ParamTo
 
 class QuadrotorGeometry(LeafSystem):
     def __init__(self, scene_graph: SceneGraph) -> None:
+        '''
+        ['quadrotor_base_link_qw',
+         'quadrotor_base_link_qx',
+         'quadrotor_base_link_qy', 
+         'quadrotor_base_link_qz', 
+         'quadrotor_base_link_x', 
+         'quadrotor_base_link_y', 
+         'quadrotor_base_link_z', 
+         'quadrotor_base_link_wx', 
+         'quadrotor_base_link_wy', 
+         'quadrotor_base_link_wz', 
+         'quadrotor_base_link_vx', 
+         'quadrotor_base_link_vy', 
+         'quadrotor_base_link_vz']
+        '''
         super().__init__()
         self.scene_graph = scene_graph
         
