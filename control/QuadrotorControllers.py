@@ -128,19 +128,6 @@ class QuadrotorController(LeafSystem):
 
         return np.hstack((differential_quaternion, state[:, 4:] - ref_state[4:]))
 
-    
-    def _OneStepRollout(self, x, u):
-        context = self.plant.CreateDefaultContext()
-        input_port = context.get_input_port()
-        
-        context.SetDiscreteState(x)
-        input_port.FixValue(context, u)
-
-        state = context.get_discrete_state()
-        self.plant.CalcForcedDiscreteVariableUpdate(context, state)
-        return state.get_vector().value().flatten()
-
-
 class QuadrotorLQR(QuadrotorController):
     """Define LQR controller for quadrotor using quaternion floating base
     """
@@ -221,7 +208,8 @@ class QuadrotoriLQR(QuadrotorController):
 
         if not self.xtraj.any() and not self.utraj.any():
             self.xtraj[:] = np.kron(np.ones((self.num_time_steps, 1)), current_state) #Maybe consider only passing x0 since this gets overwritten in self.control
-            self.utraj[:] = 1000* np.random.randn(self.num_time_steps-1, self.nu)
+            # self.utraj[:] = 1.95* np.random.randn(self.num_time_steps-1, self.nu)
+            self.utraj[:] = 1.95* np.ones((self.num_time_steps-1, self.nu)) #Normally distribute about a hover @ identity rotation
 
         self.xtraj, self.utraj = self.control(current_state, goal_state, self.xtraj, self.utraj)
         motor_current.SetFromVector(self.utraj[0])
@@ -235,9 +223,9 @@ class QuadrotoriLQR(QuadrotorController):
 
         d = np.ones((self.num_time_steps-1, self.nu))            #feedforward
 
-        iter = 0
+        self.iter = 0
         while np.max(np.linalg.norm(d, axis = 0)) > 1.5:
-            iter += 1
+            self.iter += 1
             gradV = np.zeros((self.num_time_steps, self.nx))             #gradients
             hessV = np.zeros((self.num_time_steps, self.nx, self.nx))    #hessians 
             d[:] = np.ones((self.num_time_steps-1, self.nu))             #feedforward
@@ -248,11 +236,14 @@ class QuadrotoriLQR(QuadrotorController):
             # Forward rollout with line search
             alpha = 1.0
             xtraj[:], utraj[:], Jn = self.forward_rollout(xtraj, utraj, d, K, alpha)
+
             while np.isnan(Jn) or Jn > (J - 1e-2 * alpha * deltaJ):
+                # print(f"Jn - J: {Jn - J}\nReq Improvement: {-1e-2 * alpha * deltaJ}\n\n")
                 alpha *= 0.5
                 xtraj, utraj, Jn = self.forward_rollout(xtraj, utraj, d, K, alpha)
             J = Jn
-            print(iter)
+
+        print(np.max(np.linalg.norm(d, axis = 0)))
         return xtraj, utraj
     
     
@@ -264,28 +255,52 @@ class QuadrotoriLQR(QuadrotorController):
         hessV[-1, :, :] = self.Qf
 
         for k in range(self.num_time_steps-1)[::-1]:
-            xk, uk = xtraj[k, :], utraj[k, :] 
+            xk, uk = np.copy(xtraj[k, :]), np.copy(utraj[k, :])
 
             q = self.Q @ self._ComputeDifferentialState(np.expand_dims(xk, 0), self.xgoal).T
             r = self.R @ uk
 
             # Linearization
             A, B = self.Linearize(xk, uk)
+            controllable = linalg.is_controllable(A, B)
+            if not controllable:
+                print(xk)
+                print()
+                print(uk)
+                print()
+                print(A)
+                print()
+                print(B)
+                raise RuntimeWarning(f"Uncontrollable linearization on backward pass {k} of iteration {self.iter}")
+
 
             # Action value gradient terms
             gx = q.squeeze() + A.T @ gradV[k+1, :]
             gu = r.squeeze() + B.T @ gradV[k+1, :]
 
+            q = xk[:4]
+            E = np.zeros((13, 12))
+            E[:4, :3] = GetAttititudeJacobian(q)
+            E[4:, 3:] = np.eye(9)
+
             # Action value hessian terms
-            Gxx = self.Q + A.T @ hessV[k+1, :, :] @ A
+            Gxx = self.Q + A.T @ hessV[k+1, :, :]
             Guu = self.R + B.T @ hessV[k+1, :, :] @ B
             Gxu = A.T @ hessV[k+1, :, :] @ B
             Gux = B.T @ hessV[k+1, :, :] @ A
+            
+            print(E.shape)
+            print(Gxx.shape)
 
+
+            Gxx = E @ Gxx @ E.T
+            Gux = Gux @ E.T
+            gx = E @ gx
+            
             #Regularize
             beta = 0.1
             while not linalg.is_pos_def(self.full_hessian(Gxx, Gxu, Gux, Guu)):
-                regularizer = beta * np.eye((A.shape[0]))
+                regularizer = beta * np.eye(self.nx)
 
                 Gxx += A.T @ regularizer @ A
                 Guu += B.T @ regularizer @ B
@@ -294,11 +309,21 @@ class QuadrotoriLQR(QuadrotorController):
                 
                 beta *= 2
 
+            if linalg.is_singular(Guu):
+                print(B.T @ hessV[k+1, :, :] @ B)
+                print(xk)
+                print(uk)
+                print(B)
+                raise RuntimeWarning(f"Singular Guu on backward pass {k} of iteration {self.iter}")
+
+
+            Guu_inv = linalg.qr_inverse(Guu)
+
             # Feedforward term
-            d[k, :] = linalg.qr_inverse(Guu) @ gu
+            d[k, :] = Guu_inv @ gu
 
             # Feedback term
-            K[k, :, :] = linalg.qr_inverse(Guu) @ Gux
+            K[k, :, :] = Guu_inv @ Gux
 
             #update action value gradient and hessian
             gradV[k, :] = (gx - K[k, :, :].T @ gu + K[k, :, :].T @ Guu @ d[k, :] - Gxu @ d[k, :])
@@ -310,7 +335,7 @@ class QuadrotoriLQR(QuadrotorController):
     
     def forward_rollout(self, xtraj, utraj, d, K, alpha):
         xn = np.zeros((self.num_time_steps, self.nx+1))
-        xn[0, :] = xtraj[0, :]
+        xn[0, :] = xtraj[0, :] #Set initial states to be equal
         un = np.zeros((self.num_time_steps-1, self.nu))
 
         for k in range(self.num_time_steps-1):
@@ -320,7 +345,7 @@ class QuadrotoriLQR(QuadrotorController):
 
             # print(f"Rollout {k} \n quat_norm {np.linalg.norm(xn[k, :4])} \n\n")
             # print(un[k, :])
-            xn[k + 1, :] = self.Rollout(xn[k, :], np.expand_dims(un[k, :], 0), self.dt)[-1,:]
+            xn[k + 1, :] = self.Rollout(xn[k, :], np.expand_dims(un[k, :], 0), self.dt)[1,:]
 
             # print(f"Rollout {k} \n State: {xn[k, :]} \n Action: {un[k, :]} \n\n")
         Jn = self.cost(xn, un)
