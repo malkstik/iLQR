@@ -21,10 +21,13 @@ import numpy as np
 
 from pydrake.all import Variable
 
+from sim.sim_utils import AddFloatingRpyJoint
+
+
 import os
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), os.pardir)))
-from maths.quaternions import hat, GetLeftMatrix, GetAttititudeJacobian, ParamToQuaternion, QuaternionToParam, QuaternionToRotation
+from maths.quaternions import hat, GetLeftMatrix, GetAttitudeJacobian, ParamToQuaternion, QuaternionToParam, QuaternionToRotation
 
 class QuadrotorGeometry(LeafSystem):
     def __init__(self, scene_graph: SceneGraph) -> None:
@@ -143,7 +146,7 @@ class AnalyticalQuadrotorModel:
 
         # Time derivatives
         r_dot = Q @ r
-        q_dot = 0.5 * GetAttititudeJacobian(q) @ w
+        q_dot = 0.5 * GetAttitudeJacobian(q) @ w
         v_dot = Q.T @ self._gravity + 1/self.m * self.kF_matrix @ u - hat(w) @ v
         w_dot = self.J_inv @ (-hat(w) @ self.J @ w + self.kM_matrix @ u) 
 
@@ -152,7 +155,7 @@ class AnalyticalQuadrotorModel:
     def augment_matrix(self, q):
         E = np.zeros((13, 12))
         E[:3, :3] = np.eye(3)
-        E[3:7, 3:6] = GetAttititudeJacobian(q)
+        E[3:7, 3:6] = GetAttitudeJacobian(q)
         E[7:, 6:] = np.eye(6)
 
         return E 
@@ -214,7 +217,73 @@ def MakeMultibodyQuadrotor(show_diagram = False) -> tuple[Diagram, MultibodyPlan
             diagram.GetGraphvizString(max_depth=2))[0].create_svg()))
     return diagram, plant
 
+def MakeMultibodyQuadrotor_EA(show_diagram = False):
+    '''
+    ['quadrotor_x_x', 
+    'quadrotor_y_x', 
+    'quadrotor_z_x',
+    'quadrotor_rz_q', 
+    'quadrotor_ry_q', 
+    'quadrotor_rx_q', 
+    'quadrotor_x_v', 
+    'quadrotor_y_v', 
+    'quadrotor_z_v',
+    'quadrotor_rz_w', 
+    'quadrotor_ry_w',
+    'quadrotor_rx_w']
+    '''
+    builder = DiagramBuilder()
+    # The MultibodyPlant handles f=ma, but doesn't know about propellers.
+    plant = builder.AddSystem(MultibodyPlant(0.0))
+    parser = Parser(plant)
+    (model_instance,) = parser.AddModelsFromUrl(
+        "package://drake_models/skydio_2/quadrotor.urdf"
+    )
+    # By default the multibody has a quaternion floating base.  To match
+    # QuadrotorPlant, we can manually add a FloatingRollPitchYaw joint. We set
+    # `use_ball_rpy` to false because the BallRpyJoint uses angular velocities
+    # instead of ṙ, ṗ, ẏ.
+    AddFloatingRpyJoint(
+        plant,
+        plant.GetFrameByName("base_link"),
+        model_instance,
+        use_ball_rpy=False,
+    )
+    plant.Finalize()
 
+    # Now we can add in propellers as an external force on the MultibodyPlant.
+    body_index = plant.GetBodyByName("base_link").index()
+    # Default parameters from quadrotor_plant.cc:
+    L = 0.15  # Length of the arms (m).
+    kF = 1.0  # Force input constant.
+    kM = 0.0245  # Moment input constant.
+
+    # Note: Rotors 0 and 2 rotate one way and rotors 1 and 3 rotate the other.
+    prop_info = [
+        PropellerInfo(body_index, RigidTransform([L, 0, 0]), kF, kM),
+        PropellerInfo(body_index, RigidTransform([0, L, 0]), kF, -kM),
+        PropellerInfo(body_index, RigidTransform([-L, 0, 0]), kF, kM),
+        PropellerInfo(body_index, RigidTransform([0, -L, 0]), kF, -kM),
+    ]
+    propellers = builder.AddSystem(Propeller(prop_info))
+    builder.Connect(
+        propellers.get_output_port(),
+        plant.get_applied_spatial_force_input_port(),
+    )
+    builder.Connect(
+        plant.get_body_poses_output_port(),
+        propellers.get_body_poses_input_port(),
+    )
+    builder.ExportInput(propellers.get_command_input_port(), "u")
+    builder.ExportOutput(plant.get_state_output_port(), "y")
+
+
+
+    diagram = builder.Build()
+    if show_diagram:
+        display(SVG(pydot.graph_from_dot_data(
+            diagram.GetGraphvizString(max_depth=2))[0].create_svg()))
+    return diagram, plant
 if __name__ == "__main__":
     quadrotor, mbp = MakeMultibodyQuadrotor()
 
