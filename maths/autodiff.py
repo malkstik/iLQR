@@ -2,14 +2,20 @@ import numpy as np
 import pydrake.symbolic as sym
 
 
-class derivatives:
+class CostDerivatives:
     def __init__(self, cost_stage, cost_final, xref, uref, n_x, n_u):
         self.x_sym = np.array([sym.Variable(f"x_{i}") for i in range(n_x)])
         self.u_sym = np.array([sym.Variable(f"u_{i}") for i in range(n_u)])
         
         x = self.x_sym
         u = self.u_sym
-        
+
+        self.xref = xref
+        self.uref = uref
+
+        self.cost_stage = cost_stage
+        self.cost_final = cost_final
+
         # Compute the cost expressions
         stage_cost = cost_stage(x, u, xref, uref)
         final_cost = cost_final(x, xref)
@@ -32,8 +38,8 @@ class derivatives:
         x = self.x_sym
         u = self.u_sym
         
-        stage_cost = cost_stage(x, u, xref, uref)
-        final_cost = cost_final(x, xref)
+        stage_cost = self.cost_stage(x, u, xref, uref)
+        final_cost = self.cost_final(x, xref)
         
         self.l_x = sym.Jacobian([stage_cost], x).ravel()
         self.l_u = sym.Jacobian([stage_cost], u).ravel()
