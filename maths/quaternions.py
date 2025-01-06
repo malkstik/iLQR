@@ -17,6 +17,10 @@ def hat(q) -> np.ndarray:
                      [-v[1],  v[0],  0.0]])
     return qhat
 
+def GetConjugate(q) -> np.ndarray:
+    return q * np.array([0, -1, -1, -1])
+
+
 def GetLeftMatrix(q) -> np.ndarray:
     '''
     :param q: quaternion
@@ -25,7 +29,7 @@ def GetLeftMatrix(q) -> np.ndarray:
     w = q[0]
     v = q[1:].squeeze()
 
-    L_q = np.zeros((4,4))
+    L_q = np.zeros((4,4), dtype=q.dtype)
     L_q[0, 0] = w
     L_q[0, 1:] = -v
     L_q[1:, 0] = v
@@ -33,7 +37,7 @@ def GetLeftMatrix(q) -> np.ndarray:
 
     return L_q
 
-def GetAttititudeJacobian(q):
+def GetAttitudeJacobian(q):
     '''
     Compute attitude jacobian
     :param q: quaternion
