@@ -1,7 +1,7 @@
 import numpy as np
 from maths import linalg
-import pydrake.symbolic as sym
 from sim.model import Model
+import sys
 
 
 class iLQR:
