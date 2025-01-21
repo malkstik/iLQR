@@ -14,7 +14,7 @@ def qr_inverse(A: np.ndarray) -> np.ndarray:
     '''
     
     Q, R = np.linalg.qr(A)
-    return np.linalg.solve(R, Q.T)
+    return np.linalg.inv(R) @ Q.T
 
 
 def is_singular(A) -> bool:
