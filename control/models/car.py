@@ -1,6 +1,6 @@
 import pydrake.symbolic as sym
 import numpy as np
-from sim.model import Model
+from control.models.model import Model
 
 class derivatives:
     def __init__(self, discrete_dynamics, cost_stage, cost_final, n_x, n_u):

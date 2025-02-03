@@ -1,6 +1,6 @@
 import numpy as np
 from maths import linalg
-from sim.model import Model
+from control.models.model import Model
 import sys
 
 
@@ -27,6 +27,7 @@ class iLQR:
     def run_ilqr(self, x0, u_trj):
         x_trj = self.model.rollout(x0, u_trj)
         total_cost = self.model.cost_trj(x_trj, u_trj)
+
         J = total_cost      
         Jprev = sys.float_info.max
 

@@ -1,5 +1,5 @@
 
-from sim.Quadrotor_EA import QuadrotorEAModel
+from control.models.Quadrotor_EA import QuadrotorEAModel
 
 
 from pydrake.all import (LeafSystem,
