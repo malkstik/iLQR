@@ -1,6 +1,5 @@
 
-from control.models.Quadrotor_EA import QuadrotorEAModel
-
+from control.models.Quadrotor_EA import QuadrotorEAModel, QuadrotorEAAnalyticModel
 
 from pydrake.all import (LeafSystem,
                          Diagram,
@@ -26,7 +25,8 @@ class QuadrotorController_EA(LeafSystem):
                         regu_init,
                         min_regu,
                         max_regu,
-                        max_linesearch_iters                   
+                        max_linesearch_iters,
+                        analytic_model            
                     ):
         # 12 inputs (quadrotor state), 4 motor current outputs.
         LeafSystem.__init__(self)
@@ -35,12 +35,21 @@ class QuadrotorController_EA(LeafSystem):
 
         self.mass = multibody_plant.CalcTotalMass(multibody_plant.GetMyContextFromRoot(quadrotor.CreateDefaultContext()))
 
-        self.model = QuadrotorEAModel(quadrotor, 
-                                        multibody_plant,
-                                        Q,
-                                        Qf,
-                                        R,
-                                        dt)
+        if analytic_model:
+            self.model = QuadrotorEAAnalyticModel(quadrotor, 
+                                            multibody_plant,
+                                            Q,
+                                            Qf,
+                                            R,
+                                            dt)            
+        else:
+            self.model = QuadrotorEAModel(quadrotor, 
+                                            multibody_plant,
+                                            Q,
+                                            Qf,
+                                            R,
+                                            dt)
+
         self.controller = iLQR(self.model,
                                 N,         
                                 max_iter,
