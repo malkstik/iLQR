@@ -188,10 +188,12 @@ class QuadrotorEAAnalyticModel(Model):
         euler_angles = x[3:6]
         linear_velocity = x[6:9]
         angular_velocity = x[9:]
+        rpy_angular_velocity = np.flip(angular_velocity)
 
         y,  p,  r = euler_angles.tolist()
         cr, cp, cy = m.cos(r), m.cos(p), m.cos(y)
         sr, sp, sy = m.sin(r), m.sin(p), m.sin(y)
+
 
         # Rotation matrix from body frame to world frame
         R_NB = np.array([[      cp*cy,        cy*sp*sr - sy*cr,    cy*sp*cr + sy*sr],
@@ -230,7 +232,7 @@ class QuadrotorEAAnalyticModel(Model):
                         [0.,    cr,  sr*cp],
                         [0.,   -sr,  cr*cp]], dtype = x.dtype)
 
-        w_BN_B = M @ angular_velocity
+        w_BN_B = M @ rpy_angular_velocity
         # Compute angular acceleration in body frame, expressed in world coordinates
         alpha_NB_N = R_NB @ self.inv_MoI @ (Tau_B - np.cross(w_BN_B, self.MoI @ w_BN_B) )
         
@@ -247,8 +249,8 @@ class QuadrotorEAAnalyticModel(Model):
                          [-sy*sp*pitch_rate + cy*cp*yaw_rate,   -sy*yaw_rate,    0.0],
                          [           -cp*pitch_rate,                 0.0,        0.0]], dtype = x.dtype)
         
-        angular_accel = Minv @ (alpha_NB_N - Mdt @ np.flip(angular_velocity))
-        return np.hstack((linear_velocity, angular_velocity, linear_accel, np.flip(angular_accel)))     
+        angular_accel = np.flip(Minv @ (alpha_NB_N - Mdt @ rpy_angular_velocity))
+        return np.hstack((linear_velocity, angular_velocity, linear_accel, angular_accel))    
 
 
     def discrete_dynamics(self, x0, u):
