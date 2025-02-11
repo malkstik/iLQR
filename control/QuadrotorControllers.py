@@ -427,18 +427,18 @@ class QuadrotorController_EA(LeafSystem):
     """controller base class for quadrotor using euler (RPY) angle floating base
     """
     def __init__(self, quadrotor: Diagram, multibody_plant: MultibodyPlant):
-                # 12 inputs (quadrotor state), 4 motor current outputs.
-                LeafSystem.__init__(self)
-                self.quadrotor = quadrotor
-                self.plant = multibody_plant
+            # 12 inputs (quadrotor state), 4 motor current outputs.
+            LeafSystem.__init__(self)
+            self.quadrotor = quadrotor
+            self.plant = multibody_plant
 
-                self.mass = multibody_plant.CalcTotalMass(multibody_plant.GetMyContextFromRoot(quadrotor.CreateDefaultContext()))
+            self.mass = multibody_plant.CalcTotalMass(multibody_plant.GetMyContextFromRoot(quadrotor.CreateDefaultContext()))
+            print(self.mass)
 
-
-                self.DeclareVectorInputPort("current_state", 12)
-                self.DeclareVectorInputPort("goal_state", 12)
-                self.DeclareVectorInputPort("ref_action", 4)
-                self.DeclareVectorOutputPort("control_output", 4, self.DoCalcVectorOutput) 
+            self.DeclareVectorInputPort("current_state", 12)
+            self.DeclareVectorInputPort("goal_state", 12)
+            self.DeclareVectorInputPort("ref_action", 4)
+            self.DeclareVectorOutputPort("control_output", 4, self.DoCalcVectorOutput) 
 
     def _Linearize(self, ref_state: np.ndarray, ref_action: np.ndarray, ReduceState: bool = True):
         '''
@@ -569,17 +569,8 @@ class QuadrotoriLQR_EA(QuadrotorController_EA):
                  min_regu: float = 0.01,
                  max_regu: float = 10000,
                  **kwargs):
-            # 13 inputs (quadrotor state), 4 motor current outputs.
-            LeafSystem.__init__(self)
-            self.quadrotor = quadrotor
-            self.plant = multibody_plant
-
-            self.mass = multibody_plant.CalcTotalMass(multibody_plant.GetMyContextFromRoot(quadrotor.CreateDefaultContext()))
-
-            self.DeclareVectorInputPort("current_state", 12)
-            self.DeclareVectorInputPort("goal_state", 12)
-            self.DeclareVectorInputPort("ref_action", 4)
-            self.DeclareVectorOutputPort("control_output", 4, self.DoCalcVectorOutput)
+            # 12 inputs (quadrotor state), 4 motor current outputs.
+            super().__init__(quadrotor, multibody_plant)
 
             self.Q: np.ndarray = Q
             self.R: np.ndarray = R
@@ -616,49 +607,7 @@ class QuadrotoriLQR_EA(QuadrotorController_EA):
         self.xtraj, self.utraj = self._control(current_state, goal_state, self.utraj)
         motor_current.SetFromVector(self.utraj[0])
 
-    # def _control(self, x0, xgoal, xtraj, utraj):
-    #     self.xgoal = xgoal
-    #     if (self.CostDerivatives.xref is not self.xgoal or self.CostDerivatives.uref is not self.ugoal):
-    #         self.CostDerivatives.set_references(self.xgoal, self.ugoal)
-
-    #     #Initial Rollout
-    #     xtraj = self.Rollout(x0, utraj, self.dt)
-
-    #     J = self._cost(xtraj, utraj)
-
-    #     self.iter = 0
-    #     d = np.ones((self.num_time_steps-1, self.nu))                       #feedforward
-    #     K = np.zeros((self.num_time_steps-1, self.nu, self.nx))             #feedback
-    #     regu = self.init_regu
-
-        
-    #     Jprev = 0
-    #     while J - Jprev > 0.5:
-    #         print(J - Jprev)
-    #         Jprev = J
-    #         print(self.iter)
-    #         self.iter += 1
-    #         deltaJ = 0.0                                                            #change to trajectory cost             
-            
-    #         deltaJ, K[:], d[:] = self._backward_pass(xtraj, utraj, d, K, regu)
-    #         # Forward rollout with line search
-    #         alpha = 1.0
-    #         # xtraj[:], utraj[:], Jn = self._forward_rollout(xtraj, utraj, d, K, alpha)
-    #         xtraj_new, utraj_new, Jn = self._forward_rollout(xtraj, utraj, d, K, alpha)
-            
-    #         while (np.isnan(Jn) or Jn > (J - 1e-2 * alpha * deltaJ)) and 1e-2 * alpha * deltaJ > 0.001:
-    #             print(f"J - Jn: {J - Jn}\nReq Improvement: {1e-2 * alpha * deltaJ}\n\n")
-    #             alpha *= 0.5
-    #             xtraj_new, utraj_new, Jn = self._forward_rollout(xtraj, utraj, d, K, alpha)
-            
-    #         xtraj[:] = xtraj_new
-    #         utraj[:] = utraj_new
-    #         J = Jn
-
-    #     return xtraj, utraj
-        
     def _control(self, x0, xgoal, utraj):
-
         self.xgoal = xgoal
         if (self.CostDerivatives.xref is not self.xgoal or self.CostDerivatives.uref is not self.ugoal):
             self.CostDerivatives.set_references(self.xgoal, self.ugoal)
@@ -671,36 +620,76 @@ class QuadrotoriLQR_EA(QuadrotorController_EA):
         self.iter = 0
         d = np.ones((self.num_time_steps-1, self.nu))                       #feedforward
         K = np.zeros((self.num_time_steps-1, self.nu, self.nx))             #feedback
-
         regu = self.init_regu
-        for it in range(self.max_iters):
+
+        
+        Jprev = 0
+        while abs(J - Jprev) > 0.5:
+            Jprev = J
             self.iter += 1
             deltaJ = 0.0                                                            #change to trajectory cost             
-            alpha = 0.5
-
-            # start = time()
-            deltaJ, K[:], d[:] = self._backward_pass(xtraj, utraj, d, K, regu)
-            # print(f"Backward pass {self.iter} took {time()- start} s")
             
-            # start = time()
+            deltaJ, K[:], d[:] = self._backward_pass(xtraj, utraj, d, K, regu)
+            # Forward rollout with line search
+            alpha = 1.0
+            # xtraj[:], utraj[:], Jn = self._forward_rollout(xtraj, utraj, d, K, alpha)
             xtraj_new, utraj_new, Jn = self._forward_rollout(xtraj, utraj, d, K, alpha)
-            # print(f"Rollout {self.iter} took {time()- start} s")
-            # print()
+            
+            while (np.isnan(Jn) or Jn > (J - 1e-2 * alpha * deltaJ)) and 1e-2 * alpha * deltaJ > 0.001:
+                print(f"J - Jn: {J - Jn}\nReq Improvement: {1e-2 * alpha * deltaJ}\n\n")
+                alpha *= 0.5
+                xtraj_new, utraj_new, Jn = self._forward_rollout(xtraj, utraj, d, K, alpha)
+            
+            xtraj[:] = xtraj_new
+            utraj[:] = utraj_new
+            J = Jn
 
-            cost_redu = J - Jn
-
-            if cost_redu > 0:
-                xtraj[:] = xtraj_new
-                utraj[:] = utraj_new
-                regu *= 0.7
-            else:
-                regu *= 2.0
-            regu = min(max(regu, self.min_regu), self.max_regu)
-
-            if deltaJ <= 1e-6:
-                print("early termination")
-                break
         return xtraj, utraj
+        
+    # def _control(self, x0, xgoal, utraj):
+
+    #     self.xgoal = xgoal
+    #     if (self.CostDerivatives.xref is not self.xgoal or self.CostDerivatives.uref is not self.ugoal):
+    #         self.CostDerivatives.set_references(self.xgoal, self.ugoal)
+
+    #     #Initial Rollout
+    #     xtraj = self.Rollout(x0, utraj, self.dt)
+
+    #     J = self._cost(xtraj, utraj)
+
+    #     self.iter = 0
+    #     d = np.ones((self.num_time_steps-1, self.nu))                       #feedforward
+    #     K = np.zeros((self.num_time_steps-1, self.nu, self.nx))             #feedback
+
+    #     regu = self.init_regu
+    #     for it in range(self.max_iters):
+    #         self.iter += 1
+    #         deltaJ = 0.0                                                            #change to trajectory cost             
+    #         alpha = 0.5
+
+    #         # start = time()
+    #         deltaJ, K[:], d[:] = self._backward_pass(xtraj, utraj, d, K, regu)
+    #         # print(f"Backward pass {self.iter} took {time()- start} s")
+            
+    #         # start = time()
+    #         xtraj_new, utraj_new, Jn = self._forward_rollout(xtraj, utraj, d, K, alpha)
+    #         # print(f"Rollout {self.iter} took {time()- start} s")
+    #         # print()
+
+    #         cost_redu = J - Jn
+
+    #         if cost_redu > 0:
+    #             xtraj[:] = xtraj_new
+    #             utraj[:] = utraj_new
+    #             regu *= 0.7
+    #         else:
+    #             regu *= 2.0
+    #         regu = min(max(regu, self.min_regu), self.max_regu)
+
+    #         if deltaJ <= 1e-6:
+    #             print("early termination")
+    #             break
+    #     return xtraj, utraj
     
     def _backward_pass(self, xtraj, utraj, d, K, regu):
         deltaJ = 0

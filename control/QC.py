@@ -26,7 +26,7 @@ class QuadrotorController_EA(LeafSystem):
                         min_regu,
                         max_regu,
                         max_linesearch_iters,
-                        analytic_model            
+                        analytic_model,
                     ):
         # 12 inputs (quadrotor state), 4 motor current outputs.
         LeafSystem.__init__(self)
@@ -41,14 +41,16 @@ class QuadrotorController_EA(LeafSystem):
                                             Q,
                                             Qf,
                                             R,
-                                            dt)            
+                                            dt,
+                                            N)            
         else:
             self.model = QuadrotorEAModel(quadrotor, 
                                             multibody_plant,
                                             Q,
                                             Qf,
                                             R,
-                                            dt)
+                                            dt,
+                                            N)
 
         self.controller = iLQR(self.model,
                                 N,         
@@ -56,7 +58,8 @@ class QuadrotorController_EA(LeafSystem):
                                 regu_init,
                                 min_regu,
                                 max_regu,
-                                max_linesearch_iters)
+                                max_linesearch_iters,
+                                )
 
         self.N = N
         self.nx, self.nu = self.model.get_dims()
