@@ -24,6 +24,10 @@ class iLQR:
         self.max_regu = max_regu
         self.max_linesearch_iters = max_linesearch_iters    
 
+        self.num_ls_success = 0
+        self.num_ls_fails = 0
+        self.num_iters = 0
+
     def run_ilqr(self, x0, u_trj):
         x_trj = self.model.rollout(x0, u_trj)
         total_cost = self.model.cost_trj(x_trj, u_trj)
@@ -36,50 +40,46 @@ class iLQR:
         
         self.regu = self.regu_init
 
+        self.num_iters +=1
         iters = 0
-        while abs(J - Jprev) > 1e-6 and iters < self.max_iter:
+        while abs((J - Jprev)/Jprev) > 1e-3 and iters < self.max_iter:
             iters += 1
             Jprev = J
 
-            # start = time()
-            Jn = 0.0
             d[:], K[:], deltaJ = self._backward_pass(x_trj, u_trj, d, K)
-            # print(f"backward takes {time() - start}")
-            alpha = 1
-            # start = time()
-            x_trj_new, u_trj_new = self._forward_pass(x_trj, u_trj, d, K, alpha)
-            # print(f"forwardtakes {time()-start}")
 
+            #Line search
+            x_trj_new, u_trj_new = x_trj, u_trj
             line_search_iters = 0
-
+            alpha = 1
             complete_line_search = False
             abandon_line_search = False
-
-            # start = time()
+            self.num_ls_success = 0
+            self.num_ls_fails = 0
             while not complete_line_search and not abandon_line_search: 
-                complete_line_search = Jn > (J - 1e-2 * alpha * deltaJ) or 1e-2 * alpha * deltaJ >1e-4
-                abandon_line_search = np.isnan(Jn) or line_search_iters > self.max_linesearch_iters
-
                 line_search_iters += 1
-                alpha *= 0.5
-
                 # New rollout for reduce step
-                x_trj_new, u_trj_new = self._forward_pass(x_trj, u_trj, d, K, alpha)
+                x_trj_new, u_trj_new = self._forward_pass(x_trj_new, u_trj_new, d, K, alpha)
                 Jn = self.model.cost_trj(x_trj_new, u_trj_new)
 
-                # print(Jn-J)
-
+                complete_line_search = Jn - J < -alpha * deltaJ and line_search_iters < self.max_linesearch_iters 
+                abandon_line_search = np.isnan(Jn) or line_search_iters >= self.max_linesearch_iters 
+                alpha *= 0.5
 
             if complete_line_search:
+                self.num_ls_success += 1
                 x_trj[:] = x_trj_new
-                u_trj[:] = u_trj_new
-            
+                u_trj[:] = u_trj_new                
             if abandon_line_search:
                 self.regu *= 1.6
+                self.num_ls_fails += 1
 
+            print(f"Iters: {line_search_iters}, Successful LS: {self.num_ls_success}, Failed LS: {self.num_ls_fails}" )
             self.regu = min(max(self.regu, self.min_regu), self.max_regu)
-            J = Jn     
-            return x_trj, u_trj    
+            J = Jn    
+        print(f"Iters before convergence: {iters}") 
+        print(f"%Cost reduction: {(J - Jprev)/Jprev}")
+        return x_trj, u_trj
 
   
 
@@ -101,7 +101,7 @@ class iLQR:
 
             start = time()
             l_x, l_u, l_xx, l_ux, l_uu, f_x, f_u = self.model.stage(x_trj[k], u_trj[k])
-            print(f"autodiff took {time()-start}")
+            # print(f"autodiff took {time()-start}")
             Q_x, Q_u, Q_xx, Q_ux, Q_uu = self._Q_terms(l_x, l_u, l_xx, l_ux, l_uu, f_x, f_u, V_x, V_xx)
 
             # We add regularization to ensure that Q_uu is invertible and nicely conditioned
@@ -137,8 +137,11 @@ class iLQR:
     def _V_terms(self, Q_x, Q_u, Q_xx, Q_ux, Q_uu, K, k):
         V_xx = Q_xx + K.T @ Q_uu @ K + K.T @ Q_ux + Q_ux.T @ K
         V_x = Q_x + K.T @ Q_uu @ k + K.T @ Q_u + Q_ux.T @ k
-
         return V_x, V_xx
     
     def _expected_cost_reduction(self, Q_u, Q_uu, k):
         return -Q_u.T.dot(k) - 0.5 * k.T.dot(Q_uu.dot(k))
+
+
+
+
