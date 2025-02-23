@@ -10,19 +10,15 @@ class iLQR:
                 model: Model,
                 N: int,         
                 max_iter: int,
-                regu_init: int,
-                min_regu: float = 0.001,
-                max_regu: float = 10000,
                 max_linesearch_iters: int = 20,     
+                d_tol: float = 1e-3,
                 **kwargs):
         self.model = model
         self.nx, self.nu = self.model.get_dims()
         self.N = N
         self.max_iter = max_iter
-        self.regu_init = regu_init
-        self.min_regu = min_regu
-        self.max_regu = max_regu
         self.max_linesearch_iters = max_linesearch_iters    
+        self.d_tol = d_tol
 
         self.num_ls_success = 0
         self.num_ls_fails = 0
@@ -30,6 +26,10 @@ class iLQR:
 
     def run_ilqr(self, x0, u_trj):
         x_trj = self.model.rollout(x0, u_trj)
+        if np.any(np.isnan(x_trj)):
+            print(x_trj)    
+            print(u_trj)  
+
         total_cost = self.model.cost_trj(x_trj, u_trj)
 
         J = total_cost      
@@ -38,18 +38,18 @@ class iLQR:
         d = sys.float_info.max*np.ones([self.N-1, self.nu])
         K = np.zeros([self.N-1, self.nu, self.nx])
         
-        self.regu = self.regu_init
-
         self.num_iters += 1
         iters = 0
 
-        while np.max(np.linalg.norm(d, axis=1)) > 1e-3 and iters < self.max_iter:
+        while np.max(np.linalg.norm(d, axis=1)) > self.d_tol and iters < self.max_iter:
         # while abs(J - Jprev) > 5e-4 and iters < self.max_iter or iters==0:
         # while iters < self.max_iter:
             iters += 1
             Jprev = J
 
             d[:], K[:], deltaJ = self._backward_pass(x_trj, u_trj, d, K)
+            if deltaJ < 1:
+                break
             #Line search
             line_search_iters = 0
             alpha = 1
@@ -71,15 +71,11 @@ class iLQR:
                 x_trj[:] = x_trj_new
                 u_trj[:] = u_trj_new 
             if abandon_line_search:
-                self.regu *= 1.6
                 self.num_ls_fails += 1
             # print(f"Iters: {line_search_iters}, Successful LS: {self.num_ls_success}, Failed LS: {self.num_ls_fails}" )
             # print(f"Improvement: {Jn - J}")
             # print(f"Expected Improvement: {-deltaJ}")
             # print()
-
-
-            self.regu = min(max(self.regu, self.min_regu), self.max_regu)
             J = Jn    
 
         # print(f"Iters before convergence: {iters}") 
@@ -97,36 +93,7 @@ class iLQR:
             u_trj_new[n,:] = u_trj[n] + alpha*d_trj[n] + K_trj[n].dot(x_trj_new[n] - x_trj[n])
             x_trj_new[n+1,:] = self.model.discrete_dynamics(x_trj_new[n,:], u_trj_new[n,:])
         return x_trj_new, u_trj_new
-
-    # def _backward_pass(self, x_trj, u_trj, d, K):
-    #     expected_cost_redu = 0
-
-    #     V_x, V_xx = self.model.final(x_trj[-1])
-    #     for k in range(u_trj.shape[0] - 1, -1, -1):
-
-    #         # start = time()
-    #         l_x, l_u, l_xx, l_ux, l_uu, f_x, f_u = self.model.stage(x_trj[k], u_trj[k])
-    #         # print(f"autodiff took {time()-start}")
-    #         Q_x, Q_u, Q_xx, Q_ux, Q_uu = self._Q_terms(l_x, l_u, l_xx, l_ux, l_uu, f_x, f_u, V_x, V_xx)
-
-    #         # self.regu = 0.0
-    #         # We add regularization to ensure that Q_uu is invertible and nicely conditioned
-    #         Q_uu_regu = Q_uu + np.eye(Q_uu.shape[0]) * self.regu
-    #         while linalg.is_singular(Q_uu_regu):
-    #             self.regu *= 1.6
-    #             # self.regu *= 2
-    #             Q_uu_regu += self.regu*np.eye(self.nu)     
-
-    #         d_k, K_k = self._gains(Q_uu_regu, Q_u, Q_ux)
-    #         d[k, :] = d_k
-    #         K[k, :, :] = K_k
-    #         V_x, V_xx = self._V_terms(Q_x, Q_u, Q_xx, Q_ux, Q_uu, K_k, d_k)
-    #         expected_cost_redu += self._expected_cost_reduction(Q_u, Q_uu, d_k)
-    #     # print(expected_cost_redu)
-    #     self.regu /= 1.6
-    #     return d, K, expected_cost_redu  
     
-
     def _backward_pass(self, x_trj, u_trj, d, K):
         expected_cost_redu = 0
 
@@ -138,6 +105,8 @@ class iLQR:
             # We add regularization to ensure that Q_uu is invertible and nicely conditioned
             regu = 0.1
             Q = self._full_hessian(Q_xx, Q_ux, Q_uu)
+            if np.any(np.isnan(Q)):
+                print(x_trj[k], u_trj[k])
             while np.any(np.linalg.eigvals(Q) < 0):
                 Q_xx += regu* f_x.T @ f_x
                 Q_uu += regu* f_u.T @ f_u

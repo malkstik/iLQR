@@ -73,6 +73,7 @@ class Acrobot2DModel(Model):
 
         # RK4 integration
         if integration == "RK4":
+            print("Integrating dynamics with RK4")
             f1 = self.xdot_fun(x_sym.T, u_sym).T
             f2 = self.xdot_fun(x_sym.T + 0.5*f1*dt, u_sym).T
             f3 = self.xdot_fun(x_sym.T + 0.5*f2*dt, u_sym).T
@@ -80,6 +81,7 @@ class Acrobot2DModel(Model):
             x_next = x_sym.T + (f1 + 2*f2 + 2*f3 + f4)*dt/6.0
         # Euler integration
         else:
+            print("Integrating dynamics with Euler")
             x_next = x_sym.T + self.xdot_fun(x_sym.T, u_sym).T * dt
 
         self.x_next = ca.Function('xnext', [x_sym, u_sym], [x_next])
