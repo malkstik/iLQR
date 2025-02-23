@@ -1,7 +1,11 @@
 # Description
-This repository serves as a sandbox environment for practice with optimal control algorithms using pydrake.
+This repository presents an implementation of iterative Linear Quadratic Regulator (iLQR) using pydrake and CasADi. 
 
-# Plan
-* Write and compare iLQR, TVLQR, DirCol
-* Implement GCS for path planning
-* Try out a perception algorithm, such as 3D Gaussian Splatting 
+# Examples
+
+## Acrobot
+...
+## Quadrotor using Euler Angles
+...
+## Quadrotor using Quaternions
+...
