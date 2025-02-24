@@ -4,21 +4,17 @@ from control.iLQRController import iLQR
 import numpy as np
 
 class AcrobotiLQRController(LeafSystem):
-    def __init__(self, acrobot,
-                        Q,
+    def __init__(self,  Q,
                         Qf,
                         R,
                         dt,
                         N,         
                         max_iter,
-                        regu_init,
-                        min_regu,
-                        max_regu,
                         max_linesearch_iters,
+                        d_tol,
                         **kwargs
                 ):
         LeafSystem.__init__(self)
-        self.acrobot = acrobot
         model = Acrobot2DModel( Q,
                                 Qf,
                                 R,
@@ -28,15 +24,15 @@ class AcrobotiLQRController(LeafSystem):
         self.controller = iLQR( model,
                                 N,         
                                 max_iter,
-                                regu_init,
-                                min_regu,
-                                max_regu,
                                 max_linesearch_iters,
+                                d_tol,
                                 )
 
 
         self.N = N
         self.nx, self.nu = model.get_dims()
+        self.dt = dt
+        self.last_solve = 0
 
         self.xtraj: np.ndarray = np.zeros((self.N, self.nx))
         self.utraj: np.ndarray = np.zeros((self.N-1, self.nu))
@@ -60,11 +56,12 @@ class AcrobotiLQRController(LeafSystem):
             print("Init utraj")
             #Normally distribute about a hover @ identity rotation
             self.utraj[:] = np.random.randn(self.N-1, self.nu)*2.0
-        else:
+
+        if context.get_time() == 0 or context.get_time()-self.last_solve >= self.dt:
             #Use previous utraj as initial guess with shifting forward a single timestep, 
             self.utraj[:-1, :] = self.utraj[1:,:]
-
-        self.xtraj, self.utraj = self.controller.run_ilqr(current_state, self.utraj)
+            self.xtraj, self.utraj = self.controller.run_ilqr(current_state, self.utraj)
+            self.last_solve = context.get_time()
 
         motor_current.SetFromVector(self.utraj[0, :])
     
