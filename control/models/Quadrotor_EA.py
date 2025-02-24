@@ -18,20 +18,20 @@ sys.path.append(os.path.abspath(os.path.join(os.getcwd(), os.pardir)))
 from maths import autodiff
 from maths.forward_integration import RK4
 from time import time
+    
 class QuadrotorEAModel(Model):
-    def __init__(self, quadrotor: Diagram, multibody_plant: MultibodyPlant, 
+    def __init__(self,
                  Q: np.ndarray,
                  Qf: np.ndarray,
                  R: np.ndarray,
                  dt: int = 0.01,
                  N: int = 20,
+                 integration: str = "RK4",
                  **kwargs):
+
         self.nx = 12
         self.nu = 4
         
-        self.quadrotor: Diagram = quadrotor
-        self.plant: MultibodyPlant = multibody_plant
-        self.mass = multibody_plant.CalcTotalMass(multibody_plant.GetMyContextFromRoot(quadrotor.CreateDefaultContext()))
         self.Q = Q
         self.Qf = Qf
         self.R = R
@@ -41,142 +41,6 @@ class QuadrotorEAModel(Model):
         self.xref = np.zeros(self.nx, dtype = np.float64)
         self.uref = np.zeros(self.nu, dtype = np.float64)
 
-        self.CostDerivatives = autodiff.CostDerivatives(self._cost_stage,
-                                                        self._cost_final,
-                                                        self.xref,
-                                                        self.uref,
-                                                        self.nx,
-                                                        self.nu)
-
-    def discrete_dynamics(self, x, u):
-        
-        simulator = Simulator(self.quadrotor)
-        simulator.Initialize()
-        simulator_context = simulator.get_mutable_context()
-        simulator_context.SetContinuousState(x)
-        
-        self.quadrotor.get_input_port().FixValue(simulator_context, u)
-        sim_time = simulator_context.get_time()
-
-        simulator.AdvanceTo(sim_time + self.dt)
-
-        x_next = simulator_context.get_continuous_state_vector().CopyToVector()
-
-        return x_next
-    
-    def set_references(self, xref, uref):
-        self.xref = xref
-        self.uref = uref
-        self.CostDerivatives.set_references(xref, uref)
-
-    def _linearize(self, ref_state: np.ndarray, ref_action: np.ndarray):
-        '''
-        Perform first order taylor approximation on system dynamics
-        :param ref_state: array representing state to linearize about
-        :param ref_action: array represneting action to linearize about
-        :param ReduceState: bool representing whether to return A and B matrices that consider differential quaternions or not
-        
-        '''
-        context = self.quadrotor.CreateDefaultContext()
-        context.SetContinuousState(ref_state)
-        
-        self.quadrotor.get_input_port().FixValue(context, ref_action)
-        sys =   FirstOrderTaylorApproximation(self.quadrotor, 
-                                context,
-                                self.quadrotor.get_input_port().get_index(),
-                                self.quadrotor.get_output_port().get_index())
-        
-
-        return sys.A(), sys.B()
-
-    def _batch_cost_stage(self, xtraj: np.ndarray, utraj: np.ndarray, xref: np.ndarray, uref: np.ndarray):
-        '''
-        Computes cost due to state and action trajectory
-
-        :param xtraj: state trajectory, ndarray of shape (N-1, nx)
-        :param utraj: action trajectory, ndarray of shape (N-1, nu)
-        '''
-
-        xerr =  xtraj - xref
-        uerr = utraj - uref
-
-        # Weighted errors
-        weighted_state_errors = xerr @ self.Q  
-        weighted_action = uerr@ self.R
-
-        state_cost = np.sum(weighted_state_errors * xerr) 
-        action_cost = np.sum(weighted_action * uerr)
-        return 0.5*state_cost + 0.5* action_cost
-    
-    def _cost_stage(self, x: np.ndarray, u: np.ndarray, xref: np.ndarray, uref: np.ndarray):
-        '''
-        Computes cost due to a state action tuple
-
-        :param x: state trajectory, ndarray of shape (N-1, nx)
-        :param u: action trajectory, ndarray of shape (N-1, nu)
-        '''        
-        return 0.5*(x - xref).T @ self.Q @ (x - xref) + 0.5*(u - uref).T @ self.R @ (u - uref)
-
-    def _cost_final(self, xf: np.ndarray, xref: np.ndarray):
-        '''
-        Computes cost due to final state of state trajectory
-        '''
-        return 0.5*(xf - xref).T @ self.Qf @ (xf - xref)
-    
-    def cost_trj(self, xtraj: np.ndarray, utraj: np.ndarray):
-        '''
-        Computes total cost of trajectory
-        :param xtraj: state trajectory, ndarray of shape (num_time_steps, nx)
-        :param utraj: action trajectory, ndarray of shape (num_time_steps-1, nu)
-
-        '''
-        J = 0
-        xf = xtraj[-1, :]
-
-        J += self._batch_cost_stage(xtraj[:-1,:], utraj, self.xref, self.uref)
-        J += self._cost_final(xf, self.xref)
-        return J
-    
-    def stage(self, x, u):         
-        l_x, l_u, l_xx, l_ux, l_uu = self.CostDerivatives.stage(x,u)
-        # print("Autodiff")
-        # print(f"l_x: {l_x}") 
-        # print(f"l_u: {l_u}") 
-        # print(f"l_xx: {l_xx}") 
-        # print(f"l_uu: {l_uu}") 
-        # print(f"l_ux: {l_ux}")   
-        f_x, f_u = self._linearize(x, u)
-
-        l_x = self.Q @ (x - self.xref)
-        l_u = self.R @ u
-        l_xx = self.Q
-        l_uu = self.R
-        l_ux = np.zeros((self.nu, self.nx))    
-
-        # print("Handwritten")
-        # print(f"l_x: {l_x}") 
-        # print(f"l_u: {l_u}") 
-        # print(f"l_xx: {l_xx}") 
-        # print(f"l_uu: {l_uu}") 
-        # print(f"l_ux: {l_ux}") 
-        # print()
-
-        return l_x, l_u, l_xx, l_ux, l_uu, f_x, f_u 
-    
-    def final(self, x):
-        V_x, V_xx = self.CostDerivatives.final(x)
-        return V_x, V_xx
-    
-class QuadrotorEAAnalyticModel(QuadrotorEAModel):
-    def __init__(self, quadrotor: Diagram, multibody_plant: MultibodyPlant, 
-                 Q: np.ndarray,
-                 Qf: np.ndarray,
-                 R: np.ndarray,
-                 dt: int = 0.01,
-                 N: int = 20,
-                 **kwargs):
-        super().__init__(quadrotor, multibody_plant, 
-                       Q, Qf, R, dt, N, **kwargs)   
         # Quadrotor params
         # Kinda lazy to hardcode but what can you do ¯\_(ツ)_/¯
         self.L = 0.15  # Length of the arms (m).
@@ -261,32 +125,99 @@ class QuadrotorEAAnalyticModel(QuadrotorEAModel):
 
         # Define the system dynamics
         x_dot = ca.vertcat(linear_velocity, angular_velocity, linear_accel, angular_accel)
+        xdot_fun = ca.Function('xdot', [x_sym, u_sym], [x_dot])
 
+        # RK4 integration
+        if integration == "RK4":
+            print("Integrating dynamics with RK4")
+            f1 = xdot_fun(x_sym.T, u_sym).T
+            f2 = xdot_fun(x_sym.T + 0.5*f1*dt, u_sym).T
+            f3 = xdot_fun(x_sym.T + 0.5*f2*dt, u_sym).T
+            f4 = xdot_fun(x_sym.T + 1.0*f3*dt, u_sym).T
+            x_next = x_sym.T + (f1 + 2*f2 + 2*f3 + f4)*dt/6.0
+        # Euler integration
+        else:
+            print("Integrating dynamics with Euler")
+            x_next = x_sym.T + xdot_fun(x_sym.T, u_sym).T * dt
 
+        self.x_next = ca.Function('xnext', [x_sym, u_sym], [x_next])
         # Compute Jacobians (A and B matrices)
-        A = ca.jacobian(x_dot, x_sym)  # Jacobian w.r.t. state (x)
-        B = ca.jacobian(x_dot, u_sym)  # Jacobian w.r.t. control input (u)
+        A_continuous = ca.jacobian(x_dot, x_sym)
+        B_continuous = ca.jacobian(x_dot, u_sym)
+        A_discrete = ca.jacobian(x_next, x_sym)  
+        B_discrete = ca.jacobian(x_next, u_sym)  
 
+        # CasADi function for A and B matrices
+        self.A_discrete_fun = ca.Function('A_discrete', [x_sym, u_sym], [A_discrete])
+        self.B_discrete_fun = ca.Function('B_discrete', [x_sym, u_sym], [B_discrete])      
+        self.A_continuous_fun = ca.Function('A_continuous', [x_sym, u_sym], [A_continuous])
+        self.B_continuous_fun = ca.Function('B_continuous', [x_sym, u_sym], [B_continuous])     
 
-        self.xdot_fun = ca.Function('xdot', [x_sym, u_sym], [x_dot])
-        # Now, you can create a CasADi function for A and B matrices
-        self.A_fun = ca.Function('A', [x_sym, u_sym], [A])
-        self.B_fun = ca.Function('B', [x_sym, u_sym], [B])
+    def set_references(self, xref, uref):
+        self.xref = xref
+        self.uref = uref
 
-    def continuous_dynamics(self, x: np.ndarray, u: np.ndarray) -> np.ndarray:
-        '''
-        :param x: state as [x, y, z, yaw, pitch, roll, x_dot, y_dot, z_dot, yaw_rate, pitch_rate, roll_rate]
-        :param u: action as motor currents
-        :return x_dot: state time derivative
-        '''
-        return np.array(self.xdot_fun(x, u).T.full())
-
-    def discrete_dynamics(self, x0, u):
-        # x_next = RK4(self.continuous_dynamics, x0, u, dt = self.dt)
-        x_next = self.continuous_dynamics(x0, u)*self.dt + x0
+    def discrete_dynamics(self, x, u):   
+        x_next = self.x_next(x, u)
         return x_next
+
+    def _cost_stage(self, x: np.ndarray, u: np.ndarray, xref: np.ndarray, uref: np.ndarray):
+        '''
+        Computes cost due to a state action tuple
+
+        :param x: state trajectory, ndarray of shape (N-1, nx)
+        :param u: action trajectory, ndarray of shape (N-1, nu)
+        '''        
+        xerr = (x - xref).reshape((12,1))
+        uerr = u - uref
+
+        state_cost = 0.5*(xerr).T @ self.Q @ (xerr) 
+        action_cost = 0.5*(uerr).T @ self.R @ (uerr)
+        return state_cost + action_cost
+
+    def _cost_final(self, xf: np.ndarray, xref: np.ndarray):
+        '''
+        Computes cost due to final state of state trajectory
+        '''
+        return 0.5*(xf - xref).T @ self.Qf @ (xf - xref)
     
-    def _linearize(self, ref_state: np.ndarray, ref_action: np.ndarray):
-        A = np.array(self.A_fun(ref_state, ref_action).full())
-        B = np.array(self.B_fun(ref_state, ref_action).full())
-        return A, B
+    def cost_trj(self, xtraj: np.ndarray, utraj: np.ndarray):
+        '''
+        Computes total cost of trajectory
+        :param xtraj: state trajectory, ndarray of shape (num_time_steps, nx)
+        :param utraj: action trajectory, ndarray of shape (num_time_steps-1, nu)
+
+        '''
+        J = 0
+        xf = xtraj[-1, :]
+
+
+        for n in range(self.N-1):
+            J+= self._cost_stage(xtraj[n,:], utraj[n,:], self.xref, self.uref)
+        J += self._cost_final(xf, self.xref)
+
+        return J
+
+    def _linearize_discrete(self, ref_state, ref_action):
+        discreteA, discreteB = self.A_discrete_fun(ref_state, ref_action), self.B_discrete_fun(ref_state, ref_action) 
+        return discreteA, discreteB
+
+    def _linearize_continuous(self,ref_state, ref_action):
+        contA, contB = self.A_continuous_fun(ref_state, ref_action), self.B_continuous_fun(ref_state, ref_action) 
+        return contA, contB
+    
+    def stage(self, x, u):         
+        f_x, f_u = self._linearize_discrete(x, u)
+
+        l_x = self.Q @ (x - self.xref)
+        l_u = self.R @ (u - self.uref)
+        l_xx = self.Q
+        l_uu = self.R
+        l_ux = np.zeros((self.nu, self.nx))    
+
+        return l_x, l_u, l_xx, l_ux, l_uu, f_x, f_u 
+    
+    def final(self, x):
+        V_xx = self.Qf
+        V_x = self.Qf @ (x - self.xref)
+        return V_x, V_xx

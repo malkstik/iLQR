@@ -115,8 +115,8 @@ class iLQR:
                 regu *= 2   
             # print(f"Necessary regularization: {regu}")
             d_k, K_k = self._gains(Q_uu, Q_u, Q_ux)
-            d[k, :] = d_k
-            K[k, :, :] = K_k
+            d[k, :] = np.squeeze(d_k)
+            K[k, :, :] = np.squeeze(K_k)
             V_x, V_xx = self._V_terms(Q_x, Q_u, Q_xx, Q_ux, Q_uu, K_k, d_k)
 
             expected_cost_redu += self._expected_cost_reduction(Q_u, Q_uu, d_k)
@@ -143,9 +143,7 @@ class iLQR:
         return V_x, V_xx
     
     def _expected_cost_reduction(self, Q_u, Q_uu, d):
-        # return -Q_u @ d
-
-        return -Q_u @ d - 0.5 * d.T @ (Q_uu.T @ d)
+        return -Q_u.T @ d - 0.5 * d.T @ (Q_uu.T @ d)
 
     def _full_hessian(self, Q_xx: np.ndarray, Q_ux: np.ndarray, Q_uu: np.ndarray)-> np.ndarray:
         '''
