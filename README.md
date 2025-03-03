@@ -5,7 +5,7 @@ This repository presents an implementation of iterative Linear Quadratic Regulat
 ## Acrobot
 ![Demo GIF](https://github.com/malkstik/iLQR/blob/main/results/AcrobotiLQR.gif)
 ## Quadrotor using Quaternions
-![Demo GIF](https://github.com/malkstik/iLQR/blob/main/results/https://github.com/malkstik/iLQR/blob/main/results/acrobot_exact_dynamics.gif)
+![Demo GIF](https://github.com/malkstik/iLQR/blob/main/results/QuadcopteriLQR.gif)
 
 # iLQR Controller
 
