@@ -5,19 +5,23 @@ import casadi as ca
 H = np.vstack((np.zeros((1,3)), np.eye(3)))
 T = np.diag([1.0, -1.0, -1.0, -1.0])
 quat = ca.MX.sym('quat', 4)
-qw, qx, qy, qz = quat/ca.norm_2(quat[:4])
+normalized_quat = quat/ca.norm_2(quat[:4])
+qw = normalized_quat[0]
+qx = normalized_quat[1]
+qy = normalized_quat[2]
+qz = normalized_quat[3]
 params = ca.MX.sym('phi', 3) # Three parameter representation
-
 # Define rotation matrix R_NB from body to world frame
 LeftMatrix = ca.vertcat(
-    ca.horzcat( qw,  qx,  qy,  qz),
-    ca.horzcat(-qx,  qw, -qz,  qy),
-    ca.horzcat(-qy,  qz,  qw, -qx),
-    ca.horzcat(-qz, -qy,  qx,  qw)
+    ca.horzcat( qw, -qx, -qy, -qz),
+    ca.horzcat( qx,  qw, -qz,  qy),
+    ca.horzcat( qy,  qz,  qw, -qx),
+    ca.horzcat( qz, -qy,  qx,  qw)
 )
+
 AttitudeJacobian = LeftMatrix @ H
 Conjugate = ca.horzcat(qw, -qx, -qy, -qz)
-ParamConversion = 1/ca.sqrt(1 + params.T @ params) * ca.horzcat(1, params)
+ParamConversion = 1/ca.sqrt(1 + params.T @ params) * ca.horzcat(np.array([1]), params.T)
 QuatConversion = ca.horzcat(qx, qy, qz)/qw
 Quat2Rot = H.T @ T @ LeftMatrix @ T @ LeftMatrix @ H
 

@@ -18,7 +18,7 @@ def hat(q) -> np.ndarray:
     return qhat
 
 def GetConjugate(q) -> np.ndarray:
-    return q * np.array([0, -1, -1, -1])
+    return q * np.array([1, -1, -1, -1])
 
 
 def GetLeftMatrix(q) -> np.ndarray:
@@ -50,7 +50,7 @@ def ParamToQuaternion(phi):
     '''
     Convert 3 parameter representation to quaternion
     '''
-    return 1/np.sqrt(1 + np.dot(phi, phi)) * np.hstack((np.ones(1), phi.reshape((3,1))))
+    return 1/np.sqrt(1 + np.dot(phi, phi)) * np.hstack((np.ones((1,1)), phi.reshape((1,3))))
 
 def QuaternionToParam(q: Quaternion) -> np.ndarray:
     '''
