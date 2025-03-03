@@ -42,7 +42,7 @@ class QuadrotorController_EA(LeafSystem):
                                 )
 
         self.N = N
-        self.nx, self.nu = self.model.get_dims()
+        self.nx, self.nu, self.ndx = self.model.get_dims()
         self.dt = dt
         self.last_solve = 0
 
@@ -97,7 +97,7 @@ class QuadrotorEALQRController(LeafSystem):
                                 dt,
                                 N)
         self.N = N
-        self.nx, self.nu = self.model.get_dims()
+        self.nx, self.nu, self.ndx = self.model.get_dims()
 
         self.xtraj: np.ndarray = np.zeros((self.N, self.nx))
         self.utraj: np.ndarray = np.zeros((self.N-1, self.nu))
@@ -140,9 +140,9 @@ class QuadrotorController_Quat(LeafSystem):
                         max_linesearch_iters,
                         d_tol,
                     ):
-        # 12 inputs (quadrotor state), 4 motor current outputs.
+        # 13 inputs (quadrotor state), 4 motor current outputs.
         LeafSystem.__init__(self)
-        self.model = QuadrotorEAModel(  Q,
+        self.model = QuadrotorQuatModel(  Q,
                                         Qf,
                                         R,
                                         dt,
@@ -156,14 +156,13 @@ class QuadrotorController_Quat(LeafSystem):
                                 )
 
         self.N = N
-        self.nx, self.nu = self.model.get_dims()
+        self.nx, self.nu, self.ndx = self.model.get_dims()
         self.dt = dt
         self.last_solve = 0
 
         self.xtraj: np.ndarray = np.zeros((self.N, self.nx))
         self.utraj: np.ndarray = np.zeros((self.N-1, self.nu))
         self.uref: np.ndarray = np.zeros(4, dtype = np.float64)
-
 
         self.DeclareVectorInputPort("current_state", self.nx)
         self.DeclareVectorInputPort("goal_state", self.nx)
@@ -206,7 +205,7 @@ class QuadrotorQuatLQRController(LeafSystem):
                                 Q,
                                 R,
         )
-        self.nx, self.nu = self.model.get_dims()
+        self.nx, self.nu, self.ndx = self.model.get_dims()
 
         self.uref: np.ndarray = np.array([1.9006875, 1.9006875, 1.9006875, 1.9006875])
 
@@ -231,6 +230,6 @@ class QuadrotorQuatLQRController(LeafSystem):
 
         dx = self.model.CalcDifferentialState(current_state, goal_state)
 
-        motor_current.SetFromVector((self.uref - K @ dx).squeeze())
+        motor_current.SetFromVector(np.array(self.uref - K @ dx).squeeze())
 if __name__ == "__main__":
     print("run")

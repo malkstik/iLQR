@@ -4,9 +4,10 @@ class Model:
     def __init__(self):
         self.nx = None
         self.nu = None
+        self.ndx = None
 
     def get_dims(self):
-        return self.nx, self.nu
+        return self.nx, self.nu, self.ndx
 
     def discrete_dynamics(self, x, u):
         raise NotImplementedError
@@ -17,6 +18,9 @@ class Model:
         for n in range(u_trj.shape[0]):
             x_trj[n+1] =self.discrete_dynamics(x_trj[n], u_trj[n])
         return x_trj      
+    
+    def CalcDifferentialState(self, state, ref_state):
+        return state - ref_state
     
     def _cost_stage(self, x, u):
        return NotImplementedError
@@ -37,3 +41,13 @@ class Model:
     
     def final(self, x):
         raise NotImplementedError    
+    
+    def Q_terms(self, x, l_x, l_u, l_xx, l_ux, l_uu, f_x, f_u, V_x, V_xx):
+        # x is passed as an argument to allow for more usability with base classes 
+        Q_x = l_x + f_x.T @ V_x
+        Q_u = l_u + f_u.T @ V_x
+
+        Q_xx = l_xx + f_x.T @ V_xx @ f_x
+        Q_ux = l_ux + f_u.T @ V_xx @ f_x
+        Q_uu = l_uu + f_u.T @ V_xx @ f_u
+        return Q_x, Q_u, Q_xx, Q_ux, Q_uu

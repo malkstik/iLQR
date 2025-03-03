@@ -45,7 +45,8 @@ class QuadrotorQuatModel(Model):
 
         self.nx = 13
         self.nu = 4
-        
+        self.ndx = 12
+
         self.Q = Q
         self.Qf = Qf
         self.R = R
@@ -135,6 +136,43 @@ class QuadrotorQuatModel(Model):
         self.A_continuous_fun = ca.Function('A_continuous', [x_sym, u_sym], [A_continuous])
         self.B_continuous_fun = ca.Function('B_continuous', [x_sym, u_sym], [B_continuous])             
 
+        ##---------------------------------Cost Functions---------------------------------##
+        StateDiffJacobian = ca.MX.zeros(13, 12)
+        StateDiffJacobian[:4, :3] = GetAttitudeJacobian(quat)
+        StateDiffJacobian[4:, 3:] = ca.MX.eye(9)
+        self._GetStateDiffJacobian = ca.Function('StateDiffJac', [x_sym], [StateDiffJacobian])
+
+        xref = ca.MX.sym('xref', 13)  
+        uref = ca.MX.sym('uref', 4)  
+
+        state_err = StateDiffJacobian.T@(x_sym-xref)
+        action_err = u_sym-uref
+        stage_cost = 0.5*state_err.T@Q@state_err + 0.5*action_err.T@R@action_err
+        terminal_cost = 0.5*state_err.T@Qf@state_err
+
+        self.stage_cost_fun = ca.Function('stage_cost', [x_sym, u_sym, xref, uref], [stage_cost])
+        self.terminal_cost_fun = ca.Function('terminal_cost', [x_sym, xref], [terminal_cost])
+
+        l_x = ca.jacobian(stage_cost, x_sym)
+        l_u = ca.jacobian(stage_cost, u_sym)
+
+        l_xx = ca.jacobian(l_x, x_sym)
+        l_ux = ca.jacobian(l_u, x_sym)        
+        l_uu = ca.jacobian(l_u, u_sym)
+
+        self.l_x_fun = ca.Function('l_x', [x_sym, u_sym, xref, uref], [l_x])
+        self.l_u_fun = ca.Function('l_u', [x_sym, u_sym, xref, uref], [l_u])
+        self.l_xx_fun = ca.Function('l_xx', [x_sym, u_sym, xref, uref], [l_xx])
+        self.l_ux_fun = ca.Function('l_ux', [x_sym, u_sym, xref, uref], [l_ux])
+        self.l_uu_fun = ca.Function('l_uu', [x_sym, u_sym, xref, uref], [l_uu])
+
+        V_x_n = ca.jacobian(terminal_cost, x_sym)
+        V_xx_n = ca.jacobian(V_x_n, x_sym)
+
+        self.V_x_n_fun = ca.Function('V_x', [x_sym, xref], [V_x_n])
+        self.V_xx_n_fun = ca.Function('V_xx', [x_sym, xref], [V_xx_n])
+
+
     def set_references(self, xref, uref):
         self.xref = xref
         self.uref = uref
@@ -150,18 +188,13 @@ class QuadrotorQuatModel(Model):
         :param x: state trajectory, ndarray of shape (N-1, nx)
         :param u: action trajectory, ndarray of shape (N-1, nu)
         '''        
-        xerr = (x - xref).reshape((12,1))
-        uerr = u - uref
-
-        state_cost = 0.5*(xerr).T @ self.Q @ (xerr) 
-        action_cost = 0.5*(uerr).T @ self.R @ (uerr)
-        return state_cost + action_cost
+        return self.stage_cost_fun(x, u, xref, uref)
 
     def _cost_final(self, xf: np.ndarray, xref: np.ndarray):
         '''
         Computes cost due to final state of state trajectory
         '''
-        return 0.5*(xf - xref).T @ self.Qf @ (xf - xref)
+        return self.terminal_cost_fun(xf, xref)
     
     def cost_trj(self, xtraj: np.ndarray, utraj: np.ndarray):
         '''
@@ -180,13 +213,6 @@ class QuadrotorQuatModel(Model):
 
         return J
     
-    def _GetStateDiffJacobian(self, q0):
-        StateDiffJacobian = np.zeros((13, 12), dtype = q0.dtype)
-        StateDiffJacobian[:4, :3] = GetAttitudeJacobian(q0)
-        StateDiffJacobian[4:, 3:] = np.eye(9)
-
-        return StateDiffJacobian
-
     def CalcDifferentialState(self, state: np.ndarray, ref_state: np.ndarray):
         '''
         Computes differential state accounting for quaternion kinematics
@@ -196,24 +222,13 @@ class QuadrotorQuatModel(Model):
 
         :return: ndarray of shape (nx-1)
         '''
-
-        q_ref = ref_state[:4]
-        q = state[:4]
-
-        quaternion_error = GetLeftMatrix(q_ref).T @ q.T
-
-        # if(np.any(quaternion_error[0]) <= 0.001):
-        #     print(f"q_ref: {q_ref}\n q: {q}")
-
-        differential_quaternion = np.array(QuaternionToParam(quaternion_error)).squeeze()
-
-        return np.hstack((differential_quaternion, state[4:] - ref_state[4:]))
+        G = self._GetStateDiffJacobian(state)
+        return G.T @ (state - ref_state) 
 
 
     def _linearize_discrete(self, ref_state, ref_action):
         A, B = self.A_discrete_fun(ref_state, ref_action), self.B_discrete_fun(ref_state, ref_action) 
-        q0 = ref_state[:4]
-        StateDiffJacobian = self._GetStateDiffJacobian(q0)
+        StateDiffJacobian = self._GetStateDiffJacobian(ref_state)
 
         discreteA = StateDiffJacobian.T @ A @ StateDiffJacobian
         discreteB = StateDiffJacobian.T @ B
@@ -222,8 +237,7 @@ class QuadrotorQuatModel(Model):
 
     def _linearize_continuous(self,ref_state, ref_action):
         A, B = self.A_continuous_fun(ref_state, ref_action), self.B_continuous_fun(ref_state, ref_action) 
-        q0 = ref_state[:4]
-        StateDiffJacobian = self._GetStateDiffJacobian(q0)
+        StateDiffJacobian = self._GetStateDiffJacobian(ref_state)
 
         contA = StateDiffJacobian.T @ A @ StateDiffJacobian
         contB = StateDiffJacobian.T @ B        
@@ -232,15 +246,28 @@ class QuadrotorQuatModel(Model):
     def stage(self, x, u):         
         f_x, f_u = self._linearize_discrete(x, u)
 
-        l_x = self.Q @ (x - self.xref)
-        l_u = self.R @ (u - self.uref)
-        l_xx = self.Q
-        l_uu = self.R
-        l_ux = np.zeros((self.nu, self.nx))    
+        l_x = self.l_x_fun(x, u, self.xref, self.uref)
+        l_u = self.l_u_fun(x, u, self.xref, self.uref)
+        l_xx = self.l_xx_fun(x, u, self.xref, self.uref)
+        l_uu = self.l_uu_fun(x, u, self.xref, self.uref)
+        l_ux = self.l_ux_fun(x, u, self.xref, self.uref)
 
         return l_x, l_u, l_xx, l_ux, l_uu, f_x, f_u 
     
     def final(self, x):
-        V_xx = self.Qf
-        V_x = self.Qf @ (x - self.xref)
-        return V_x, V_xx
+        G = self._GetStateDiffJacobian(x)
+
+        V_xx = G.T @ self.V_xx_n_fun(x, self.xref) @ G
+        V_x = self.V_x_n_fun(x, self.xref) @ G
+
+        return V_x.T, V_xx
+    
+    def Q_terms(self, state, l_x, l_u, l_xx, l_ux, l_uu, f_x, f_u, V_x, V_xx):
+        G = self._GetStateDiffJacobian(state)
+
+        Q_x = (l_x @ G).T + f_x.T @ V_x
+        Q_u = l_u.T + f_u.T @ V_x 
+        Q_xx = G.T @ l_xx @ G + f_x.T @ V_xx @ f_x
+        Q_ux = l_ux @ G + f_u.T @ V_xx @ f_x
+        Q_uu = l_uu + f_u.T @ V_xx @ f_u
+        return Q_x, Q_u, Q_xx, Q_ux, Q_uu

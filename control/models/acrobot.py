@@ -13,6 +13,7 @@ class Acrobot2DModel(Model):
         self.N = N
         self.nx = 4
         self.nu = 1
+        self.ndx = 4
 
         self.xref = np.zeros(self.nx, dtype = np.float64)
         self.uref = np.zeros(self.nu, dtype = np.float64)

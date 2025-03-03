@@ -55,6 +55,7 @@ class CarModel(Model):
     def __init__(self, r, v_target):
         self.nx = 5
         self.nu = 2
+        self.ndx = 5
 
         self.r = r
         self.v_target = v_target
