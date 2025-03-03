@@ -31,7 +31,8 @@ class QuadrotorEAModel(Model):
 
         self.nx = 12
         self.nu = 4
-        
+        self.ndx = 12
+
         self.Q = Q
         self.Qf = Qf
         self.R = R

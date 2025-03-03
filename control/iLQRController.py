@@ -14,7 +14,7 @@ class iLQR:
                 d_tol: float = 1e-3,
                 **kwargs):
         self.model = model
-        self.nx, self.nu = self.model.get_dims()
+        self.nx, self.nu, self.ndx = self.model.get_dims()
         self.N = N
         self.max_iter = max_iter
         self.max_linesearch_iters = max_linesearch_iters    
@@ -36,7 +36,7 @@ class iLQR:
         Jprev = J
 
         d = sys.float_info.max*np.ones([self.N-1, self.nu])
-        K = np.zeros([self.N-1, self.nu, self.nx])
+        K = np.zeros([self.N-1, self.nu, self.ndx])
         
         self.num_iters += 1
         iters = 0
@@ -57,6 +57,7 @@ class iLQR:
             abandon_line_search = False
             self.num_ls_success = 0
             self.num_ls_fails = 0
+
             while not complete_line_search and not abandon_line_search: 
                 line_search_iters += 1
                 # New rollout for reduce step
@@ -88,10 +89,11 @@ class iLQR:
         x_trj_new = np.zeros(x_trj.shape)
         x_trj_new[0, :] = x_trj[0, :]
         u_trj_new = np.zeros(u_trj.shape)
-
         for n in range(self.N-1):
-            u_trj_new[n,:] = u_trj[n] + alpha*d_trj[n] + K_trj[n].dot(x_trj_new[n] - x_trj[n])
+            dx = self.model.CalcDifferentialState(x_trj_new[n], x_trj[n])
+            u_trj_new[n,:] = u_trj[n] + alpha*d_trj[n] + np.squeeze(K_trj[n].dot(dx))
             x_trj_new[n+1,:] = self.model.discrete_dynamics(x_trj_new[n,:], u_trj_new[n,:])
+
         return x_trj_new, u_trj_new
     
     def _backward_pass(self, x_trj, u_trj, d, K):
@@ -100,8 +102,7 @@ class iLQR:
         V_x, V_xx = self.model.final(x_trj[-1, :])
         for k in range(self.N-2, -1, -1):
             l_x, l_u, l_xx, l_ux, l_uu, f_x, f_u = self.model.stage(x_trj[k], u_trj[k])
-            Q_x, Q_u, Q_xx, Q_ux, Q_uu = self._Q_terms(l_x, l_u, l_xx, l_ux, l_uu, f_x, f_u, V_x, V_xx)
-
+            Q_x, Q_u, Q_xx, Q_ux, Q_uu = self.model.Q_terms(x_trj[k], l_x, l_u, l_xx, l_ux, l_uu, f_x, f_u, V_x, V_xx)
             # We add regularization to ensure that Q_uu is invertible and nicely conditioned
             regu = 0.1
             Q = self._full_hessian(Q_xx, Q_ux, Q_uu)
@@ -121,15 +122,6 @@ class iLQR:
 
             expected_cost_redu += self._expected_cost_reduction(Q_u, Q_uu, d_k)
         return d, K, expected_cost_redu  
-
-    def _Q_terms(self, l_x, l_u, l_xx, l_ux, l_uu, f_x, f_u, V_x, V_xx):
-        Q_x = l_x + f_x.T @ V_x
-        Q_u = l_u + f_u.T @ V_x
-
-        Q_xx = l_xx + f_x.T @ V_xx @ f_x
-        Q_ux = l_ux + f_u.T @ V_xx @ f_x
-        Q_uu = l_uu + f_u.T @ V_xx @ f_u
-        return Q_x, Q_u, Q_xx, Q_ux, Q_uu
     
     def _gains(self, Q_uu, Q_u, Q_ux):
         Q_uu_inv = np.linalg.inv(Q_uu)
