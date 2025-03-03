@@ -1,5 +1,4 @@
 import numpy as np
-from maths import linalg
 from control.models.model import Model
 import sys
 from time import time
