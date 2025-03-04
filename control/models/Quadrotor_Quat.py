@@ -22,10 +22,12 @@ from maths.casadi_quaternions import (GetLeftMatrix,
 )
 
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), os.pardir)))
-from maths import autodiff
 from maths.forward_integration import RK4
+import maths.quaternions as qmath
 from time import time
     
+
+
 class QuadrotorQuatModel(Model):
     '''
     Quadrotor model class defining defining dynamics of quadrotor with states 
@@ -242,6 +244,197 @@ class QuadrotorQuatModel(Model):
         contA = StateDiffJacobian.T @ A @ StateDiffJacobian
         contB = StateDiffJacobian.T @ B        
         return contA, contB
+    
+    def stage(self, x, u):         
+        f_x, f_u = self._linearize_discrete(x, u)
+
+        l_x = self.l_x_fun(x, u, self.xref, self.uref)
+        l_u = self.l_u_fun(x, u, self.xref, self.uref)
+        l_xx = self.l_xx_fun(x, u, self.xref, self.uref)
+        l_uu = self.l_uu_fun(x, u, self.xref, self.uref)
+        l_ux = self.l_ux_fun(x, u, self.xref, self.uref)
+
+        return l_x, l_u, l_xx, l_ux, l_uu, f_x, f_u 
+    
+    def final(self, x):
+        G = self._GetStateDiffJacobian(x)
+
+        V_xx = G.T @ self.V_xx_n_fun(x, self.xref) @ G
+        V_x = self.V_x_n_fun(x, self.xref) @ G
+
+        return V_x.T, V_xx
+    
+    def Q_terms(self, state, l_x, l_u, l_xx, l_ux, l_uu, f_x, f_u, V_x, V_xx):
+        G = self._GetStateDiffJacobian(state)
+
+        Q_x = (l_x @ G).T + f_x.T @ V_x
+        Q_u = l_u.T + f_u.T @ V_x 
+        Q_xx = G.T @ l_xx @ G + f_x.T @ V_xx @ f_x
+        Q_ux = l_ux @ G + f_u.T @ V_xx @ f_x
+        Q_uu = l_uu + f_u.T @ V_xx @ f_u
+        return Q_x, Q_u, Q_xx, Q_ux, Q_uu
+    
+
+class DrakeQuadrotorQuatModel(Model):
+    '''
+    Quadrotor model class defining defining dynamics of quadrotor with states 
+    [qw, qx, qy, qz, x, y, z, wx, wy, wz, vx, vy, vz]^T
+
+    and stage cost
+    (x-xref).T @ G(q).T @ Q @ (x-xref)@G(q) + u.T@R@u
+    '''
+    def __init__(self,
+                 quadrotor,
+                 multibody_plant,
+                 Q: np.ndarray,
+                 Qf: np.ndarray,
+                 R: np.ndarray,
+                 dt: int = 0.01,
+                 N: int = 20,
+                 integration: str = "RK4",
+                 **kwargs):
+
+        self.nx = 13
+        self.nu = 4
+        self.ndx = 12
+
+        self.Q = Q
+        self.Qf = Qf
+        self.R = R
+        self.dt = dt
+        self.N = N
+
+        self.xref = np.zeros(self.nx, dtype = np.float64)
+        self.uref = np.zeros(self.nu, dtype = np.float64)
+
+        self.quadrotor = quadrotor
+        self.plant = multibody_plant
+
+
+    def set_references(self, xref, uref):
+        self.xref = xref
+        self.uref = uref
+
+    def discrete_dynamics(self, x, u):   
+        x_next = self.x_next(x, u)
+        return x_next
+
+    def _cost_stage(self, x: np.ndarray, u: np.ndarray, xref: np.ndarray, uref: np.ndarray):
+        '''
+        Computes cost due to a state action tuple
+
+        :param x: state trajectory, ndarray of shape (N-1, nx)
+        :param u: action trajectory, ndarray of shape (N-1, nu)
+        '''        
+        return self.stage_cost_fun(x, u, xref, uref)
+
+    def _cost_final(self, xf: np.ndarray, xref: np.ndarray):
+        '''
+        Computes cost due to final state of state trajectory
+        '''
+        return self.terminal_cost_fun(xf, xref)
+    
+    def cost_trj(self, xtraj: np.ndarray, utraj: np.ndarray):
+        '''
+        Computes total cost of trajectory
+        :param xtraj: state trajectory, ndarray of shape (num_time_steps, nx)
+        :param utraj: action trajectory, ndarray of shape (num_time_steps-1, nu)
+
+        '''
+        J = 0
+        xf = xtraj[-1, :]
+
+
+        for n in range(self.N-1):
+            J+= self._cost_stage(xtraj[n,:], utraj[n,:], self.xref, self.uref)
+        J += self._cost_final(xf, self.xref)
+
+        return J
+    
+    def CalcDifferentialState(self, state: np.ndarray, ref_state: np.ndarray):
+        '''
+        Computes differential state accounting for quaternion kinematics
+
+        :param state: ndarray of shape (nx)
+        :param ref_state: ndarray of shape (nx,)
+
+        :return: ndarray of shape (nx-1)
+        '''
+        G = self._GetStateDiffJacobian(state)
+        return G.T @ (state - ref_state) 
+
+    def _GetStateDiffJacobian(ref_state):
+        qo = ref_state[:4]
+        StateDiffJacobian = np.zeros((13, 12), dtype = q0.dtype)
+        StateDiffJacobian[:4, :3] = qmath.GetAttitudeJacobian(q0)
+        StateDiffJacobian[4:, 3:] = np.eye(9)
+
+        return StateDiffJacobian
+
+
+    def _linearize_discrete(self, ref_state, ref_action):
+        A, B = self.A_discrete_fun(ref_state, ref_action), self.B_discrete_fun(ref_state, ref_action) 
+        StateDiffJacobian = self._GetStateDiffJacobian(ref_state)
+
+        discreteA = StateDiffJacobian.T @ A @ StateDiffJacobian
+        discreteB = StateDiffJacobian.T @ B
+
+        return discreteA, discreteB
+
+    def _linearize_continuous(self,ref_state, ref_action):
+        '''
+        Perform first order taylor approximation on system dynamics
+        :param ref_state: array representing state to linearize about
+        :param ref_action: array represneting action to linearize about
+        :param ReduceState: bool representing whether to return A and B matrices that consider differential quaternions or not
+        
+        '''
+        context = self.quadrotor.CreateDefaultContext()
+        context.SetContinuousState(ref_state)
+        
+        self.quadrotor.get_input_port().FixValue(context, ref_action)
+        sys =   FirstOrderTaylorApproximation(self.quadrotor, 
+                                context,
+                                self.quadrotor.get_input_port().get_index(),
+                                self.quadrotor.get_output_port().get_index())
+        
+        q0 = context.get_continuous_state_vector().CopyToVector()[:4].reshape((4,1))
+        StateDiffJacobian = self._GetStateDiffJacobian(q0)
+
+        A, B = sys.A(), sys.B()    
+        A = StateDiffJacobian.T @ sys.A() @ StateDiffJacobian
+        B = StateDiffJacobian.T @ sys.B()
+
+        return A, B
+
+
+    def _linearize_discrete(self, ref_state, ref_action):
+
+        '''
+        Perform first order taylor approximation on system dynamics andd return discrete form
+        :param ref_state: array representing state to linearize about
+        :param ref_action: array represneting action to linearize about
+        :param ReduceState: bool representing whether to return A and B matrices that consider differential quaternions or not
+        
+        '''
+        context = self.quadrotor.CreateDefaultContext()
+        context.SetContinuousState(ref_state)
+        
+        self.quadrotor.get_input_port().FixValue(context, ref_action)
+        sys =   FirstOrderTaylorApproximation(self.quadrotor, 
+                                context,
+                                self.quadrotor.get_input_port().get_index(),
+                                self.quadrotor.get_output_port().get_index())
+        
+        discrete_sys = sys.
+        q0 = context.get_continuous_state_vector().CopyToVector()[:4].reshape((4,1))
+        StateDiffJacobian = self._GetStateDiffJacobian(q0)
+
+        A, B = sys.A(), sys.B()    
+        A = StateDiffJacobian.T @ sys.A() @ StateDiffJacobian
+        B = StateDiffJacobian.T @ sys.B()
+
+        return A, B
     
     def stage(self, x, u):         
         f_x, f_u = self._linearize_discrete(x, u)

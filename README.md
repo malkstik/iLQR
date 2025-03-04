@@ -1,6 +1,14 @@
 # Description
 This repository presents an implementation of iterative Linear Quadratic Regulator (iLQR) using pydrake and CasADi. Included are examples using an acrobot, quadcopter with euler angle representation, and quadcopter with quaternion representation.
 
+# Dependencies
+ - pydrake
+ - NumPy
+ - SciPy
+ - CasADi
+
+A dockerfile with run and build scripts are also provided for convenience.
+
 # Examples
 ## Acrobot
 ![Demo GIF](https://github.com/malkstik/iLQR/blob/main/results/AcrobotiLQR.gif)

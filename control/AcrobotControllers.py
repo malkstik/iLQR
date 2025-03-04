@@ -30,7 +30,7 @@ class AcrobotiLQRController(LeafSystem):
 
 
         self.N = N
-        self.nx, self.nu = model.get_dims()
+        self.nx, self.nu, ndx = model.get_dims()
         self.dt = dt
         self.last_solve = 0
 

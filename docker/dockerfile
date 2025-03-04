@@ -52,6 +52,9 @@ RUN apt-get install -y iputils-ping
 RUN apt-get update && apt-get install -y gdb
 RUN apt-get install -y ffmpeg
 RUN pip3 install notebook
+RUN pip3 install casadi==1.21.5
+RUN pip3 install numpy==1.21.5
+RUN pip3 install scipy==1.8.0
 
 #X11 Forwarding
 RUN apt install -y xauth
